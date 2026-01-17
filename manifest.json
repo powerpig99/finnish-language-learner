@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Finnish Language Learning for YLE Areena",
   "version": "3.1.0",
-  "description": "Learn Finnish with dual subtitles, popup dictionary with AI translation, auto-pause, and playback speed control on YLE Areena. Supports Google Translate, DeepL, Claude, Gemini, and Grok.",
+  "description": "Learn Finnish on YLE Areena with dual subtitles, popup dictionary, auto-pause, and playback speed control.",
   "icons": {
     "16": "icons/icon.png",
     "48": "icons/icon.png",
