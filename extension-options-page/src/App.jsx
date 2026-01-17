@@ -990,6 +990,7 @@ function PersonalSettingsSection() {
   const [targetLanguage, setTargetLanguage] = useState("EN-US");
   const [translationProvider, setTranslationProvider] = useState("google");
   const [providerApiKey, setProviderApiKey] = useState("");
+  const [subtitleFontSize, setSubtitleFontSize] = useState("medium");
 
   useEffect(() => {
     ChromeStorageSyncHandler.getTargetLanguage()
@@ -999,6 +1000,20 @@ function PersonalSettingsSection() {
       .catch((error) => {
         console.error(
           "YleDualSubExtension: Error loading target language from Chrome storage:",
+          error
+        );
+      });
+
+    // Load subtitle font size
+    chrome.storage.sync.get(['subtitleFontSize'])
+      .then((result) => {
+        if (result.subtitleFontSize) {
+          setSubtitleFontSize(result.subtitleFontSize);
+        }
+      })
+      .catch((error) => {
+        console.error(
+          "YleDualSubExtension: Error loading subtitle font size:",
           error
         );
       });
@@ -1062,6 +1077,17 @@ function PersonalSettingsSection() {
       .catch((error) => {
         console.error("YleDualSubExtension: Error saving API key:", error);
         alert("Failed to save API key. Please try again.");
+      });
+  }
+
+  function handleFontSizeChange(event) {
+    const newSize = event.target.value;
+    setSubtitleFontSize(newSize);
+
+    chrome.storage.sync.set({ subtitleFontSize: newSize })
+      .catch((error) => {
+        console.error("YleDualSubExtension: Error saving font size:", error);
+        alert("Failed to save font size. Please try again.");
       });
   }
 
@@ -1163,6 +1189,28 @@ function PersonalSettingsSection() {
           need to reload the YLE Areena page for the change to take effect.
         </p>
       </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+          <label className="add-token-form__input-label">
+            Subtitle Font Size
+          </label>
+          <select
+            value={subtitleFontSize}
+            onChange={handleFontSizeChange}
+            className="language-select-dropdown"
+          >
+            <option value="small">Small (24px / 20px)</option>
+            <option value="medium">Medium (32px / 28px)</option>
+            <option value="large">Large (40px / 36px)</option>
+            <option value="xlarge">Extra Large (48px / 42px)</option>
+            <option value="xxlarge">2K Display (56px / 50px)</option>
+            <option value="huge">4K Display (64px / 56px)</option>
+          </select>
+          <p style={{ fontSize: "14px", color: "#666", margin: "8px 0 0 0" }}>
+            Adjust the size of subtitles. First value is Finnish text, second is translation.
+            Use larger sizes for high-resolution displays. Changes apply immediately.
+          </p>
+        </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "16px", paddingTop: "16px", borderTop: "1px solid rgba(255,255,255,0.1)" }}>
           <label className="add-token-form__input-label">

@@ -151,8 +151,9 @@ async function sleep(ms) {
 }
 
 function calculateBackoffDelay(attempt) {
-  const exponentialDelay = 200 * Math.pow(2, attempt);
-  const jitter = Math.random() * (exponentialDelay / 2);
+  // Start with 1 second and double each time: 1s, 2s, 4s
+  const exponentialDelay = 1000 * Math.pow(2, attempt);
+  const jitter = Math.random() * 500;
   return exponentialDelay + jitter;
 }
 
@@ -510,6 +511,7 @@ async function translateWithGoogle(texts, targetLanguage) {
     console.log('YleDualSubExtension: Google Translate request - texts:', texts.length, 'target:', googleLang);
 
     const translations = [];
+    const FETCH_TIMEOUT = 8000; // 8 second timeout per request
 
     // Process sequentially with delays to avoid rate limiting
     for (let index = 0; index < texts.length; index++) {
@@ -517,13 +519,19 @@ async function translateWithGoogle(texts, targetLanguage) {
 
       // Add delay between requests to avoid rate limiting (except for first request)
       if (index > 0) {
-        await sleep(150); // 150ms delay between requests
+        await sleep(200); // 200ms delay between requests (increased from 150ms)
       }
 
       const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=fi&tl=${googleLang}&dt=t&q=${encodeURIComponent(text)}`;
 
       try {
-        const response = await fetch(url);
+        // Use AbortController for timeout
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
+
+        const response = await fetch(url, { signal: controller.signal });
+        clearTimeout(timeoutId);
+
         if (!response.ok) {
           console.error(`YleDualSubExtension: Google Translate HTTP error for text ${index}:`, response.status);
           // On error, use original text instead of failing entire batch
@@ -548,7 +556,11 @@ async function translateWithGoogle(texts, targetLanguage) {
 
         translations.push(translated || text);
       } catch (fetchError) {
-        console.error(`YleDualSubExtension: Google Translate fetch error for text ${index}:`, fetchError);
+        if (fetchError.name === 'AbortError') {
+          console.warn(`YleDualSubExtension: Google Translate timeout for text ${index}:`, text.substring(0, 30));
+        } else {
+          console.error(`YleDualSubExtension: Google Translate fetch error for text ${index}:`, fetchError);
+        }
         // On error, use original text instead of failing entire batch
         translations.push(text);
       }

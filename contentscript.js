@@ -137,6 +137,53 @@ function savePlaybackSpeed(speed) {
 // Track video element to reapply speed on new videos
 let lastVideoElement = null;
 
+// Subtitle font size setting (small, medium, large, xlarge)
+let subtitleFontSize = "medium";
+
+// Font size mappings (Finnish text / Translated text)
+const FONT_SIZE_MAP = {
+  small: { main: 24, translated: 20 },
+  medium: { main: 32, translated: 28 },
+  large: { main: 40, translated: 36 },
+  xlarge: { main: 48, translated: 42 },
+  xxlarge: { main: 56, translated: 50 },
+  huge: { main: 64, translated: 56 }
+};
+
+// Load saved subtitle font size from chrome storage
+chrome.storage.sync.get(['subtitleFontSize'], (result) => {
+  if (result.subtitleFontSize) {
+    subtitleFontSize = result.subtitleFontSize;
+  }
+  // Always apply font size (use default if not set)
+  applySubtitleFontSize();
+});
+
+/**
+ * Apply the current subtitle font size via CSS injection
+ */
+function applySubtitleFontSize() {
+  const styleId = 'yle-dual-sub-fontsize-style';
+  let styleEl = document.getElementById(styleId);
+
+  if (!styleEl) {
+    styleEl = document.createElement('style');
+    styleEl.id = styleId;
+    document.head.appendChild(styleEl);
+  }
+
+  const sizes = FONT_SIZE_MAP[subtitleFontSize] || FONT_SIZE_MAP.medium;
+
+  styleEl.textContent = `
+    #displayed-subtitles-wrapper span {
+      font-size: ${sizes.main}px !important;
+    }
+    #displayed-subtitles-wrapper .translated-text-span {
+      font-size: ${sizes.translated}px !important;
+    }
+  `;
+}
+
 /**
  * Setup speed control for video element
  */
@@ -1447,6 +1494,12 @@ function addContentToDisplayedSubtitlesWrapper(
   // If no translation yet, show "Translating..." and set up a retry mechanism
   if (!targetLanguageText) {
     targetLanguageText = "Translating...";
+
+    // Queue this displayed text for translation since it wasn't found in cache
+    // This handles cases where VTT text differs from displayed text (YLE combines cues)
+    translationQueue.addToQueue(finnishText);
+    translationQueue.processQueue();
+
     const startTime = Date.now();
     // Set up a periodic check to update the translation when it arrives
     const checkTranslation = setInterval(() => {
@@ -1494,6 +1547,9 @@ function addContentToDisplayedSubtitlesWrapper(
  * @param {MutationRecord} mutation
  * @returns {void}
  */
+// Track last displayed subtitle to avoid unnecessary re-renders
+let lastDisplayedSubtitleText = "";
+
 function handleSubtitlesWrapperMutation(mutation) {
   const originalSubtitlesWrapper = mutation.target;
   originalSubtitlesWrapper.style.display = "none";
@@ -1502,10 +1558,26 @@ function handleSubtitlesWrapperMutation(mutation) {
     // @ts-ignore - Node is used as HTMLElement at runtime
     originalSubtitlesWrapper
   );
-  displayedSubtitlesWrapper.innerHTML = "";
 
   if (mutation.addedNodes.length > 0) {
     const finnishTextSpans = mutation.target.querySelectorAll("span");
+
+    // Get the current Finnish text
+    const currentFinnishText = Array.from(finnishTextSpans)
+      .map(span => span.innerText)
+      .join(" ")
+      .replace(/\n/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    // Skip re-render if the text hasn't changed (prevents flicker when controls appear/disappear)
+    if (currentFinnishText === lastDisplayedSubtitleText && displayedSubtitlesWrapper.innerHTML !== "") {
+      return;
+    }
+
+    lastDisplayedSubtitleText = currentFinnishText;
+    displayedSubtitlesWrapper.innerHTML = "";
+
     addContentToDisplayedSubtitlesWrapper(
       displayedSubtitlesWrapper,
       // @ts-ignore - NodeListOf<Element> is used as NodeListOf<HTMLSpanElement> at runtime
@@ -1529,6 +1601,14 @@ function handleSubtitlesWrapperMutation(mutation) {
           }
         }
       }
+    }
+  } else {
+    // No added nodes - subtitles might have been cleared
+    // Check if the original wrapper is now empty
+    const finnishTextSpans = mutation.target.querySelectorAll("span");
+    if (finnishTextSpans.length === 0) {
+      displayedSubtitlesWrapper.innerHTML = "";
+      lastDisplayedSubtitleText = "";
     }
   }
 }
@@ -2044,8 +2124,9 @@ async function loadMovieCacheAndUpdateMetadata() {
     console.info(`YleDualSubExtension: Loaded ${subtitleRecords.length} cached subtitles for movie: ${currentMovieName}`);
   }
   for (const subtitleRecord of subtitleRecords) {
+    // Use toTranslationKey to normalize the key, matching how lookups are done
     sharedTranslationMap.set(
-      subtitleRecord.originalText,
+      toTranslationKey(subtitleRecord.originalText),
       subtitleRecord.translatedText
     );
   }
@@ -2154,6 +2235,15 @@ chrome.storage.onChanged.addListener(async (changes, namespace) => {
       alert(`Your target language has changed to ${changes.targetLanguage.newValue}. ` +
         `We need to reload the page for the change to work.`);
       location.reload();
+    }
+  }
+  // Handle subtitle font size changes
+  if (namespace === 'sync' && changes.subtitleFontSize) {
+    const newSize = changes.subtitleFontSize.newValue;
+    if (newSize && typeof newSize === 'string') {
+      subtitleFontSize = newSize;
+      applySubtitleFontSize();
+      console.info(`YleDualSubExtension: Subtitle font size updated to ${newSize}`);
     }
   }
 });

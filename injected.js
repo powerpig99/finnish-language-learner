@@ -954,3 +954,65 @@ const vttParser = new WebVTTParser();
         return send.apply(this, arguments);
     };
 })(XMLHttpRequest);
+
+// Also intercept fetch API for VTT files (modern video players often use fetch)
+(function() {
+    const originalFetch = window.fetch;
+
+    window.fetch = async function(input, init) {
+        const response = await originalFetch.apply(this, arguments);
+
+        // Get the URL from the input
+        let url = '';
+        if (typeof input === 'string') {
+            url = input;
+        } else if (input instanceof Request) {
+            url = input.url;
+        }
+
+        // Check if this is a VTT file
+        if (url.toLowerCase().endsWith('.vtt')) {
+            try {
+                // Clone the response so we can read it without consuming the original
+                const clonedResponse = response.clone();
+                const text = await clonedResponse.text();
+
+                const vttFileTree = vttParser.parse(text);
+
+                // Collect all subtitles with timing for batch translation
+                const allSubtitles = [];
+
+                for (const cue of vttFileTree.cues) {
+                    if (cue && typeof cue.text === "string") {
+                        const subtitle = cue.text.replace(/\n/g, " ").replace(/\s+/g, " ").trim();
+                        if (subtitle.length > 0) {
+                            allSubtitles.push({
+                                text: subtitle,
+                                startTime: cue.startTime,
+                                endTime: cue.endTime
+                            });
+                        }
+                    }
+                }
+
+                // Send batch event with all subtitles for contextual translation
+                if (allSubtitles.length > 0) {
+                    const batchEvent = new CustomEvent("sendBatchTranslationEvent", {
+                        bubbles: true,
+                        cancelable: true,
+                        detail: {
+                            subtitles: allSubtitles,
+                            vttUrl: url
+                        }
+                    });
+                    document.dispatchEvent(batchEvent);
+                    console.info(`YleDualSubExtension: [fetch] Sent batch of ${allSubtitles.length} subtitles for translation`);
+                }
+            } catch (e) {
+                console.error("YleDualSubExtension: [fetch] Failed to parse VTT file:", e);
+            }
+        }
+
+        return response;
+    };
+})();
