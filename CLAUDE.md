@@ -495,6 +495,24 @@ if (!this._subtitles || this._subtitles.length === 0) {
 
 **Key insight:** `setSubtitles()` just stores data - don't guard it with UI-dependent checks like `isInitialized()`.
 
+### 12. Array Reference Bug in setSubtitles (CRITICAL)
+**Problem:** Even after `setSubtitles(fullSubtitles)` was called, `_subtitles` would be empty when download was triggered.
+
+**Root Cause:** `setSubtitles` stored a REFERENCE to the array, not a copy:
+```javascript
+// WRONG - stores reference
+this._subtitles = subtitles;
+```
+When the navigation handler later did `fullSubtitles.length = 0`, it cleared the SAME array that `_subtitles` pointed to!
+
+**Solution:** Deep copy the array in `setSubtitles()`:
+```javascript
+// CORRECT - stores a copy
+this._subtitles = subtitles.map(sub => ({ ...sub }));
+```
+
+**Key insight:** When storing arrays that may be modified elsewhere, ALWAYS copy them. Watch out for `.length = 0` pattern which clears arrays in-place.
+
 ---
 
 ## Common Issues & Debugging
