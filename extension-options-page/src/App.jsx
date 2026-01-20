@@ -1131,10 +1131,18 @@ function PersonalSettingsSection() {
               placeholder="Enter your API key here"
             />
             <p style={{ fontSize: "14px", color: "#666", margin: "8px 0 0 0" }}>
-              {translationProvider === 'deepl' && "Get your DeepL API key from the 'Translation Keys Management' section above, or visit deepl.com/pro-api"}
-              {translationProvider === 'claude' && "Get your Claude API key from console.anthropic.com"}
-              {translationProvider === 'gemini' && "Get your Gemini API key from aistudio.google.com"}
-              {translationProvider === 'grok' && "Get your Grok API key from x.ai"}
+              {translationProvider === 'deepl' && (
+                <>Get your DeepL API key from <a href="https://www.deepl.com/en/your-account/keys" target="_blank" rel="noopener noreferrer" style={{ color: "#60a5fa" }}>deepl.com/your-account/keys</a></>
+              )}
+              {translationProvider === 'claude' && (
+                <>Get your Claude API key from <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer" style={{ color: "#60a5fa" }}>console.anthropic.com</a></>
+              )}
+              {translationProvider === 'gemini' && (
+                <>Get your Gemini API key from <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" style={{ color: "#60a5fa" }}>aistudio.google.com</a></>
+              )}
+              {translationProvider === 'grok' && (
+                <>Get your Grok API key from <a href="https://console.x.ai" target="_blank" rel="noopener noreferrer" style={{ color: "#60a5fa" }}>x.ai</a></>
+              )}
             </p>
           </div>
         )}
@@ -1348,8 +1356,6 @@ function App() {
         }}
       >
         <Header />
-
-        <TokenManagementAccordion />
 
         <PersonalSettingsAccordion />
       </div>

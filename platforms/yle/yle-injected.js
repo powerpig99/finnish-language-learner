@@ -880,6 +880,153 @@ const WebVTTSerializer = function () {
 // End section
 // ================================
 
+// ================================
+// SECTION: Language Detection
+// ================================
+
+/**
+ * Heuristic language detection from subtitle text
+ * Detects Finnish, Swedish, English and other common languages
+ */
+const LanguageDetector = {
+  // Language patterns with common words and special characters
+  patterns: {
+    fi: {
+      // Finnish: common words and special characters ä, ö
+      words: /\b(minä|sinä|hän|me|te|he|on|ovat|oli|olisi|olla|ja|tai|mutta|että|kun|jos|niin|kuin|mitä|mikä|missä|miksi|koska|kanssa|joka|jotka|myös|vain|sitten|nyt|tässä|täällä|siellä|tuolla|tänne|sinne|tänään|huomenna|eilen|aina|koskaan|joskus|ehkä|pitää|täytyy|voida|haluta|tietää|nähdä|kuulla|sanoa|mennä|tulla|ottaa|antaa)\b/gi,
+      chars: /[äöÄÖ]/,
+      weight: 0
+    },
+    sv: {
+      // Swedish: common words and special character å
+      words: /\b(jag|du|han|hon|den|det|vi|ni|de|är|var|vara|har|hade|och|eller|men|att|när|om|så|som|vad|vilken|var|varför|för|med|på|av|till|från|också|bara|sedan|nu|här|där|dit|idag|imorgon|igår|alltid|aldrig|ibland|kanske|måste|kan|vill|vet|ser|hör|säger|går|kommer|tar|ger)\b/gi,
+      chars: /[åÅ]/,
+      weight: 0
+    },
+    en: {
+      // English: common words
+      words: /\b(the|a|an|is|are|was|were|be|been|being|have|has|had|do|does|did|will|would|could|should|can|may|might|must|shall|and|or|but|if|then|else|when|where|why|how|what|which|who|this|that|these|those|here|there|now|just|only|also|very|really|always|never|sometimes|maybe|want|need|know|think|see|hear|say|go|come|take|give|get|make|let|put|use|find|tell)\b/gi,
+      chars: null, // No special chars
+      weight: 0
+    },
+    de: {
+      // German: common words and special characters ü, ß
+      words: /\b(ich|du|er|sie|es|wir|ihr|ist|sind|war|waren|sein|haben|hat|hatte|und|oder|aber|wenn|dann|weil|dass|als|wie|was|wer|wo|warum|für|mit|auf|von|zu|aus|auch|nur|noch|schon|jetzt|hier|dort|heute|morgen|gestern|immer|nie|manchmal|vielleicht|müssen|können|wollen|wissen|sehen|hören|sagen|gehen|kommen|nehmen|geben)\b/gi,
+      chars: /[üÜßäöÄÖ]/,
+      weight: 0
+    },
+    fr: {
+      // French: common words
+      words: /\b(je|tu|il|elle|nous|vous|ils|elles|est|sont|était|étaient|être|avoir|a|ont|avait|et|ou|mais|si|alors|parce|que|quand|où|pourquoi|comment|qui|quoi|ce|cette|ces|ici|là|maintenant|seulement|aussi|très|vraiment|toujours|jamais|parfois|peut-être|vouloir|devoir|pouvoir|savoir|voir|entendre|dire|aller|venir|prendre|donner)\b/gi,
+      chars: /[éèêëàâäùûüïîôœçÉÈÊËÀÂÄÙÛÜÏÎÔŒÇ]/,
+      weight: 0
+    }
+  },
+
+  // Track detected language to avoid repeated detection
+  _detected: null,
+  _sampleCount: 0,
+  _maxSamples: 5,
+
+  /**
+   * Detect language from a text sample
+   * @param {string} text - Text to analyze
+   * @returns {string|null} - Detected language code or null
+   */
+  detect(text) {
+    if (!text || typeof text !== 'string') return null;
+
+    // Reset weights for fresh detection
+    for (const lang in this.patterns) {
+      this.patterns[lang].weight = 0;
+    }
+
+    const lowerText = text.toLowerCase();
+
+    // Check each language pattern
+    for (const lang in this.patterns) {
+      const pattern = this.patterns[lang];
+
+      // Count word matches
+      const wordMatches = lowerText.match(pattern.words);
+      if (wordMatches) {
+        pattern.weight += wordMatches.length * 2;
+      }
+
+      // Check for special characters (strong indicator)
+      if (pattern.chars && pattern.chars.test(text)) {
+        pattern.weight += 5;
+      }
+    }
+
+    // Find language with highest weight
+    let maxWeight = 0;
+    let detectedLang = null;
+
+    for (const lang in this.patterns) {
+      if (this.patterns[lang].weight > maxWeight) {
+        maxWeight = this.patterns[lang].weight;
+        detectedLang = lang;
+      }
+    }
+
+    // Only return if we have reasonable confidence (weight >= 3)
+    return maxWeight >= 3 ? detectedLang : null;
+  },
+
+  /**
+   * Process subtitle batch and detect language
+   * @param {Array} subtitles - Array of subtitle objects with text property
+   * @returns {string|null} - Detected language code or null
+   */
+  detectFromBatch(subtitles) {
+    if (this._detected && this._sampleCount >= this._maxSamples) {
+      // Already confidently detected
+      return this._detected;
+    }
+
+    if (!subtitles || subtitles.length === 0) return this._detected;
+
+    // Sample first few subtitles for detection
+    const sampleSize = Math.min(10, subtitles.length);
+    const sampleText = subtitles
+      .slice(0, sampleSize)
+      .map(s => s.text || '')
+      .join(' ');
+
+    const detected = this.detect(sampleText);
+
+    if (detected) {
+      this._sampleCount++;
+      if (!this._detected) {
+        this._detected = detected;
+        console.info('DualSubExtension: [YLE] Language detected:', detected);
+
+        // Dispatch event for content script
+        const event = new CustomEvent('yleSourceLanguageDetected', {
+          bubbles: true,
+          detail: { language: detected, platform: 'yle' }
+        });
+        document.dispatchEvent(event);
+      }
+    }
+
+    return this._detected;
+  },
+
+  /**
+   * Reset detection state (for new video)
+   */
+  reset() {
+    this._detected = null;
+    this._sampleCount = 0;
+  }
+};
+
+// ================================
+// End Language Detection
+// ================================
+
 const decoder = new TextDecoder("utf-8");
 const vttParser = new WebVTTParser();
 
@@ -932,16 +1079,20 @@ const vttParser = new WebVTTParser();
                 // Send batch event FIRST with all subtitles for contextual translation
                 // This allows the batch handler to set isBatchTranslating flag before individual events
                 if (allSubtitles.length > 0) {
+                    // Detect language from subtitles
+                    LanguageDetector.detectFromBatch(allSubtitles);
+
                     const batchEvent = new CustomEvent("sendBatchTranslationEvent", {
                         bubbles: true,
                         cancelable: true,
                         detail: {
                             subtitles: allSubtitles,
-                            vttUrl: this._url
+                            vttUrl: this._url,
+                            detectedLanguage: LanguageDetector._detected
                         }
                     });
                     document.dispatchEvent(batchEvent);
-                    console.info(`YleDualSubExtension: Sent batch of ${allSubtitles.length} subtitles for translation`);
+                    console.info(`YleDualSubExtension: Sent batch of ${allSubtitles.length} subtitles for translation (lang: ${LanguageDetector._detected || 'unknown'})`);
                 }
 
                 // Individual events are no longer needed since batch handles all subtitles
@@ -997,16 +1148,20 @@ const vttParser = new WebVTTParser();
 
                 // Send batch event with all subtitles for contextual translation
                 if (allSubtitles.length > 0) {
+                    // Detect language from subtitles
+                    LanguageDetector.detectFromBatch(allSubtitles);
+
                     const batchEvent = new CustomEvent("sendBatchTranslationEvent", {
                         bubbles: true,
                         cancelable: true,
                         detail: {
                             subtitles: allSubtitles,
-                            vttUrl: url
+                            vttUrl: url,
+                            detectedLanguage: LanguageDetector._detected
                         }
                     });
                     document.dispatchEvent(batchEvent);
-                    console.info(`YleDualSubExtension: [fetch] Sent batch of ${allSubtitles.length} subtitles for translation`);
+                    console.info(`YleDualSubExtension: [fetch] Sent batch of ${allSubtitles.length} subtitles for translation (lang: ${LanguageDetector._detected || 'unknown'})`);
                 }
             } catch (e) {
                 console.error("YleDualSubExtension: [fetch] Failed to parse VTT file:", e);

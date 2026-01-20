@@ -500,9 +500,10 @@ async function getWordTranslation(db, word, targetLanguage) {
  * @param {string} word - The original word
  * @param {string} targetLanguage - Target language (e.g., "EN-US")
  * @param {string} translation - The translated word
+ * @param {string} [source='wiktionary'] - Source of translation ('wiktionary' or 'llm')
  * @returns {Promise<void>}
  */
-async function saveWordTranslation(db, word, targetLanguage, translation) {
+async function saveWordTranslation(db, word, targetLanguage, translation, source = 'wiktionary') {
     const normalizedWord = word.toLowerCase().trim();
     const lastAccessedDays = Math.floor(Date.now() / (1000 * 60 * 60 * 24));
 
@@ -517,7 +518,8 @@ async function saveWordTranslation(db, word, targetLanguage, translation) {
                 originalLanguage: "FI",
                 targetLanguage,
                 translation,
-                lastAccessedDays
+                lastAccessedDays,
+                source  // Track whether translation came from 'wiktionary' or 'llm'
             };
 
             const DBSaveRequest = objectStore.put(wordTranslation);

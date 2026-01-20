@@ -7,7 +7,8 @@
 
 const HTML5Adapter = {
   name: 'html5',
-  sourceLanguage: null, // User must select or auto-detect
+  sourceLanguage: null, // Dynamic - detected from TextTracks
+  _detectedLanguage: null,
 
   // Track attached videos to avoid duplicates
   _attachedVideos: new WeakSet(),
@@ -160,6 +161,11 @@ const HTML5Adapter = {
     }
 
     console.info('DualSubExtension: Found text track:', track.label || track.language);
+
+    // Detect language from track
+    if (track.language && !this._detectedLanguage) {
+      this.setDetectedLanguage(track.language);
+    }
 
     // Set to hidden so we get events but browser doesn't render
     const originalMode = track.mode;
@@ -469,6 +475,39 @@ const HTML5Adapter = {
   isSubtitleMutation(mutation) {
     // For HTML5, we use TextTrack events instead of mutations
     return false;
+  },
+
+  /**
+   * Set the detected source language from text track
+   * @param {string} langCode - Detected language code (e.g., 'en', 'fi')
+   */
+  setDetectedLanguage(langCode) {
+    this._detectedLanguage = langCode;
+    this.sourceLanguage = langCode;
+    console.info('DualSubExtension: HTML5 source language detected:', langCode);
+
+    // Dispatch event for other modules to react
+    const event = new CustomEvent('html5SourceLanguageDetected', {
+      bubbles: true,
+      detail: { language: langCode, platform: 'html5' }
+    });
+    document.dispatchEvent(event);
+  },
+
+  /**
+   * Get the current source language (detected or default)
+   * @returns {string|null} - Source language code or null if not detected
+   */
+  getSourceLanguage() {
+    return this._detectedLanguage || this.sourceLanguage;
+  },
+
+  /**
+   * Reset detected language (e.g., on navigation)
+   */
+  resetDetectedLanguage() {
+    this._detectedLanguage = null;
+    this.sourceLanguage = null;
   }
 };
 

@@ -137,6 +137,70 @@ let autoPauseEnabled = false;
 // State of Playback Speed (1x to 2x in 0.25 steps)
 let playbackSpeed = 1.0;
 
+// State of Extension Enabled (global on/off toggle)
+let extensionEnabled = true;
+let detectedSourceLanguage = null;
+
+// Target language for translation (loaded from storage)
+window._targetLanguage = 'en'; // Default to English
+chrome.storage.sync.get(['targetLanguage'], (result) => {
+  if (result.targetLanguage) {
+    window._targetLanguage = result.targetLanguage;
+  }
+});
+
+/**
+ * Load extension enabled state from Chrome storage
+ */
+async function loadExtensionEnabledState() {
+  try {
+    const result = await chrome.storage.sync.get(['extensionEnabled']);
+    extensionEnabled = result.extensionEnabled !== false; // Default to true
+    console.info('DualSubExtension: Extension enabled state loaded:', extensionEnabled);
+  } catch (error) {
+    console.warn('DualSubExtension: Error loading extension enabled state:', error);
+    extensionEnabled = true;
+  }
+}
+
+// Load extension enabled state on startup
+loadExtensionEnabledState();
+
+/**
+ * Check if subtitles should be processed based on extension state
+ * @returns {boolean}
+ */
+function shouldProcessSubtitles() {
+  return extensionEnabled;
+}
+
+/**
+ * Check if translation should be performed
+ * Returns false if source and target languages are the same
+ * @returns {boolean}
+ */
+function shouldTranslate() {
+  if (!extensionEnabled || !dualSubEnabled) {
+    return false;
+  }
+
+  // If no detected source language, assume we should translate
+  if (!detectedSourceLanguage) {
+    return true;
+  }
+
+  // Check if same language using the utility function
+  if (typeof isSameLanguage === 'function') {
+    // Get target language from storage or use default
+    const targetLang = window._targetLanguage || 'en';
+    if (isSameLanguage(detectedSourceLanguage, targetLang)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 // Load saved playback speed from chrome storage
 chrome.storage.sync.get(['playbackSpeed'], (result) => {
   if (result.playbackSpeed) {
@@ -290,16 +354,36 @@ async function initializeUnifiedControlPanel() {
   await new Promise(resolve => setTimeout(resolve, 500));
 
   try {
+    // Check initial captions state
+    let captionsEnabled = false;
+    if (currentPlatform.name === 'youtube' && typeof YouTubeAdapter !== 'undefined') {
+      captionsEnabled = YouTubeAdapter.areCaptionsEnabled();
+      console.log('DualSubExtension: YouTube captions initial state:', captionsEnabled);
+    } else if (currentPlatform.name === 'yle') {
+      // YLE requires manual captions enable - assume ON if we have subtitles
+      captionsEnabled = fullSubtitles.length > 0 || !!detectedSourceLanguage;
+      console.log('DualSubExtension: YLE captions initial state:', captionsEnabled);
+    } else {
+      // HTML5 - assume captions available if we have subtitles
+      captionsEnabled = fullSubtitles.length > 0;
+    }
+
     console.log('DualSubExtension: Calling ControlIntegration.init with state:', {
-      dualSubEnabled, autoPauseEnabled, playbackSpeed
+      dualSubEnabled, autoPauseEnabled, playbackSpeed, captionsEnabled
     });
 
-    const panel = await ControlIntegration.init(currentPlatform.name, {
+    // Use detected source language if available, otherwise don't override
+    const initOptions = {
       dualSubEnabled: dualSubEnabled,
       autoPauseEnabled: autoPauseEnabled,
       playbackSpeed: playbackSpeed,
-      sourceLanguage: currentPlatform.name === 'youtube' ? 'en' : 'fi'
-    });
+      captionsEnabled: captionsEnabled
+    };
+    if (detectedSourceLanguage) {
+      initOptions.sourceLanguage = detectedSourceLanguage;
+    }
+
+    const panel = await ControlIntegration.init(currentPlatform.name, initOptions);
 
     if (panel) {
       console.info('DualSubExtension: Unified control panel initialized successfully');
@@ -308,6 +392,41 @@ async function initializeUnifiedControlPanel() {
       if (fullSubtitles.length > 0) {
         ControlIntegration.setSubtitles(fullSubtitles);
         console.info('DualSubExtension: Synced', fullSubtitles.length, 'pre-loaded subtitles with ControlIntegration');
+      }
+
+      // After init, show overlay if conditions are met (CC on + extension on)
+      const state = ControlIntegration.getState();
+      console.info('DualSubExtension: Initial state after init:', {
+        captionsEnabled: state.captionsEnabled,
+        extensionEnabled: state.extensionEnabled,
+        dualSubEnabled: state.dualSubEnabled
+      });
+
+      // Update global variable from loaded state
+      extensionEnabled = state.extensionEnabled;
+      dualSubEnabled = state.dualSubEnabled;
+
+      if (state.captionsEnabled && state.extensionEnabled) {
+        // Show our overlay
+        const extensionOverlay = document.getElementById('dual-sub-overlay');
+        if (extensionOverlay) {
+          extensionOverlay.style.display = 'flex';
+        }
+        const displayedSubtitlesWrapper = document.getElementById('displayed-subtitles-wrapper');
+        if (displayedSubtitlesWrapper) {
+          displayedSubtitlesWrapper.style.display = 'flex';
+        }
+        // Hide native captions
+        if (currentPlatform.name === 'youtube' && typeof YouTubeAdapter !== 'undefined') {
+          YouTubeAdapter.hideNativeCaptions();
+        }
+        console.info('DualSubExtension: Initial state: CC on + Extension on - showing our overlay');
+      } else if (state.captionsEnabled && !state.extensionEnabled) {
+        // Show native captions
+        if (currentPlatform.name === 'youtube' && typeof YouTubeAdapter !== 'undefined') {
+          YouTubeAdapter.showNativeCaptions();
+        }
+        console.info('DualSubExtension: Initial state: CC on + Extension off - showing native captions');
       }
     } else {
       console.warn('DualSubExtension: Unified control panel init returned null');
@@ -1004,7 +1123,10 @@ async function showWordTooltip(word, wordElement, context) {
   wordElement.classList.add("active");
 
   // Create tooltip with Wiktionary link placeholder
-  const wiktionaryUrl = `https://en.wiktionary.org/wiki/${encodeURIComponent(word.toLowerCase())}#Finnish`;
+  // Use target language for Wiktionary subdomain (falls back to 'en' if not supported)
+  const wiktLang = typeof getWiktionaryLang === 'function' ? getWiktionaryLang(targetLanguage) : 'en';
+  const sourceLangSection = detectedSourceLanguage ? `#${getLanguageName(detectedSourceLanguage.toUpperCase())}` : '';
+  const wiktionaryUrl = `https://${wiktLang}.wiktionary.org/wiki/${encodeURIComponent(word.toLowerCase())}${sourceLangSection}`;
   const tooltip = document.createElement("div");
   tooltip.className = "word-tooltip";
   tooltip.innerHTML = `
@@ -1070,7 +1192,7 @@ async function showWordTooltip(word, wordElement, context) {
         const cacheKey = `${word.toLowerCase().trim()}:${targetLanguage}`;
         wordTranslationCache.set(cacheKey, llmResult);
         if (globalDatabaseInstance) {
-          saveWordTranslation(globalDatabaseInstance, word.toLowerCase().trim(), targetLanguage, llmResult)
+          saveWordTranslation(globalDatabaseInstance, word.toLowerCase().trim(), targetLanguage, llmResult, 'llm')
             .catch(err => console.warn("YleDualSubExtension: Error caching AI word translation:", err));
         }
       }
@@ -1232,7 +1354,10 @@ window.clearWordCache = clearWordCache;
  */
 async function translateWord(word, context) {
   const normalizedWord = word.toLowerCase().trim();
-  const wiktionaryUrl = `https://en.wiktionary.org/wiki/${encodeURIComponent(normalizedWord)}#Finnish`;
+  // Use target language for Wiktionary subdomain (falls back to 'en' if not supported)
+  const wiktLang = typeof getWiktionaryLang === 'function' ? getWiktionaryLang(targetLanguage) : 'en';
+  const sourceLangSection = detectedSourceLanguage ? `#${getLanguageName(detectedSourceLanguage.toUpperCase())}` : '';
+  const wiktionaryUrl = `https://${wiktLang}.wiktionary.org/wiki/${encodeURIComponent(normalizedWord)}${sourceLangSection}`;
 
   // Check in-memory cache first
   const cacheKey = `${normalizedWord}:${targetLanguage}`;
@@ -1252,7 +1377,9 @@ async function translateWord(word, context) {
       const cached = await getWordTranslation(globalDatabaseInstance, normalizedWord, targetLanguage);
       if (cached && !isInvalidCachedTranslation(cached.translation)) {
         wordTranslationCache.set(cacheKey, cached.translation);
-        return { translation: cached.translation, wiktionaryUrl, source: 'cache' };
+        // Return the original source (wiktionary or llm) so UI can show correct link
+        // Default to 'wiktionary' for backward compatibility with old cache entries
+        return { translation: cached.translation, wiktionaryUrl, source: cached.source || 'wiktionary' };
       }
     } catch (error) {
       console.warn("YleDualSubExtension: Error reading word translation from cache:", error);
@@ -1267,7 +1394,7 @@ async function translateWord(word, context) {
     wordTranslationCache.set(cacheKey, translation);
 
     if (globalDatabaseInstance) {
-      saveWordTranslation(globalDatabaseInstance, normalizedWord, targetLanguage, translation)
+      saveWordTranslation(globalDatabaseInstance, normalizedWord, targetLanguage, translation, 'wiktionary')
         .catch(err => console.warn("YleDualSubExtension: Error caching word translation:", err));
     }
 
@@ -1285,7 +1412,7 @@ async function translateWord(word, context) {
       wordTranslationCache.set(cacheKey, translation);
 
       if (globalDatabaseInstance) {
-        saveWordTranslation(globalDatabaseInstance, normalizedWord, targetLanguage, translation)
+        saveWordTranslation(globalDatabaseInstance, normalizedWord, targetLanguage, translation, 'llm')
           .catch(err => console.warn("YleDualSubExtension: Error caching word translation:", err));
       }
 
@@ -1360,12 +1487,19 @@ function getLanguageName(langCode) {
 
 /**
  * Fetch word definition from Wiktionary API
- * @param {string} word - Finnish word to look up
+ * Uses target language for Wiktionary subdomain, looks for source language entry
+ * @param {string} word - Word to look up (in source language)
  * @returns {Promise<string>} - The definition/translation
  */
 async function fetchWiktionaryDefinition(word) {
-  // Use Wiktionary REST API to get definitions
-  const apiUrl = `https://en.wiktionary.org/api/rest_v1/page/definition/${encodeURIComponent(word)}`;
+  // Use target language for Wiktionary API (definitions will be in target language)
+  // Falls back to English if target language not supported
+  const wiktLang = typeof getWiktionaryLang === 'function' ? getWiktionaryLang(targetLanguage) : 'en';
+  const apiUrl = `https://${wiktLang}.wiktionary.org/api/rest_v1/page/definition/${encodeURIComponent(word)}`;
+
+  // Determine source language code for looking up entries
+  // Use detectedSourceLanguage if available, otherwise default to 'fi' (Finnish)
+  const sourceLangCode = detectedSourceLanguage ? normalizeLanguageCode(detectedSourceLanguage) : 'fi';
 
   try {
     const response = await fetch(apiUrl, {
@@ -1382,12 +1516,12 @@ async function fetchWiktionaryDefinition(word) {
 
     const data = await response.json();
 
-    // Look for Finnish definitions
-    const finnishEntry = data.fi;
-    if (finnishEntry && finnishEntry.length > 0) {
-      // Extract definitions from Finnish entry
+    // Look for source language definitions
+    const sourceEntry = data[sourceLangCode];
+    if (sourceEntry && sourceEntry.length > 0) {
+      // Extract definitions from source language entry
       const definitions = [];
-      for (const entry of finnishEntry) {
+      for (const entry of sourceEntry) {
         if (entry.definitions && entry.definitions.length > 0) {
           for (const def of entry.definitions.slice(0, 3)) { // Limit to 3 definitions
             // Clean up HTML tags from definition
@@ -1407,9 +1541,9 @@ async function fetchWiktionaryDefinition(word) {
       }
     }
 
-    throw new Error('No Finnish definition found');
+    throw new Error(`No ${getLanguageName(sourceLangCode.toUpperCase())} definition found`);
   } catch (error) {
-    if (error.message.includes('Wiktionary') || error.message.includes('not found') || error.message.includes('Finnish')) {
+    if (error.message.includes('Wiktionary') || error.message.includes('not found') || error.message.includes('definition')) {
       throw error;
     }
     throw new Error('Failed to fetch from Wiktionary');
@@ -1743,8 +1877,9 @@ function addContentToDisplayedSubtitlesWrapper(
   const finnishSpan = createSubtitleSpanWithClickableWords(finnishText, spanClassName);
   displayedSubtitlesWrapper.appendChild(finnishSpan);
 
-  // Only add translation line when dualSubEnabled is true
-  if (dualSubEnabled) {
+  // Only add translation line when dualSubEnabled is true AND translation is needed
+  // Skip translation if source and target languages are the same
+  if (dualSubEnabled && shouldTranslate()) {
     const translationKey = toTranslationKey(finnishText);
     let targetLanguageText =
       sharedTranslationMap.get(translationKey) ||
@@ -1810,6 +1945,8 @@ function addContentToDisplayedSubtitlesWrapper(
  */
 // Track last displayed subtitle to avoid unnecessary re-renders
 let lastDisplayedSubtitleText = "";
+// Track whether YLE subtitles were previously disabled (to detect re-enable)
+let yleSubtitlesWereDisabled = false;
 
 function handleSubtitlesWrapperMutation(mutation) {
   const originalSubtitlesWrapper = mutation.target;
@@ -1834,6 +1971,19 @@ function handleSubtitlesWrapperMutation(mutation) {
     // Skip re-render if the text hasn't changed (prevents flicker when controls appear/disappear)
     if (currentFinnishText === lastDisplayedSubtitleText && displayedSubtitlesWrapper.innerHTML !== "") {
       return;
+    }
+
+    // If subtitles were previously disabled and now have content, they've been re-enabled
+    if (yleSubtitlesWereDisabled && currentFinnishText.length > 0) {
+      console.info('DualSubExtension: YLE subtitles appear to be re-enabled');
+      yleSubtitlesWereDisabled = false;
+
+      // Dispatch event for other modules to react
+      const event = new CustomEvent('yleNativeCaptionsToggled', {
+        bubbles: true,
+        detail: { enabled: true, platform: 'yle' }
+      });
+      document.dispatchEvent(event);
     }
 
     lastDisplayedSubtitleText = currentFinnishText;
@@ -1870,6 +2020,19 @@ function handleSubtitlesWrapperMutation(mutation) {
     if (finnishTextSpans.length === 0) {
       displayedSubtitlesWrapper.innerHTML = "";
       lastDisplayedSubtitleText = "";
+
+      // Check if this is a subtitle disable (removed nodes but no new ones)
+      if (mutation.removedNodes.length > 0) {
+        console.info('DualSubExtension: YLE subtitles appear to be disabled (wrapper emptied)');
+        yleSubtitlesWereDisabled = true;
+
+        // Dispatch event for other modules to react
+        const event = new CustomEvent('yleNativeCaptionsToggled', {
+          bubbles: true,
+          detail: { enabled: false, platform: 'yle' }
+        });
+        document.dispatchEvent(event);
+      }
     }
   }
 }
@@ -2316,7 +2479,7 @@ if (currentPlatform.name === 'youtube') {
   });
 
   // Listen for subtitles loaded from any language
-  document.addEventListener('youtubeSubtitlesLoaded', (e) => {
+  document.addEventListener('youtubeSubtitlesLoaded', async (e) => {
     const { subtitles, language } = e.detail;
     console.info(`DualSubExtension: Loaded ${subtitles.length} subtitles for ${language}`);
 
@@ -2338,12 +2501,18 @@ if (currentPlatform.name === 'youtube') {
       // If using a different language than expected, update the source language
       if (language !== ytSourceLanguage) {
         ytSourceLanguage = language;
+        detectedSourceLanguage = language;  // Also update global detected language
         console.info(`DualSubExtension: Switched source language to ${language} (available subtitles)`);
 
         // Update UI selector if exists
         const langSelector = document.getElementById('dual-sub-source-lang');
         if (langSelector) {
           langSelector.value = language;
+        }
+
+        // Update ControlIntegration if initialized
+        if (typeof ControlIntegration !== 'undefined') {
+          ControlIntegration.setSourceLanguage(language);
         }
       }
 
@@ -2364,12 +2533,26 @@ if (currentPlatform.name === 'youtube') {
         ControlIntegration.setSubtitles(fullSubtitles);
       }
 
+      // Load cache from IndexedDB before starting translation
+      // This ensures we don't re-translate already cached subtitles
+      if (sharedTranslationMap.size === 0 && typeof YouTubeAdapter !== 'undefined') {
+        try {
+          const videoTitle = await YouTubeAdapter.getVideoTitle();
+          if (videoTitle) {
+            await loadMovieCacheAndUpdateMetadata(videoTitle);
+            console.info(`DualSubExtension: Pre-loaded cache for "${videoTitle}", ${sharedTranslationMap.size} translations available`);
+          }
+        } catch (err) {
+          console.warn('DualSubExtension: Could not pre-load cache:', err);
+        }
+      }
+
       // Only start batch translation if:
-      // 1. Dual sub is enabled
+      // 1. Dual sub is enabled AND translation is needed (not same language)
       // 2. We have subtitles
       // 3. We haven't already translated these (not cached or translations empty)
       const needsTranslation = !alreadyCached || sharedTranslationMap.size === 0;
-      if (dualSubEnabled && subtitles.length > 0 && needsTranslation && !isBatchTranslating) {
+      if (dualSubEnabled && shouldTranslate() && subtitles.length > 0 && needsTranslation && !isBatchTranslating) {
         handleBatchTranslation(subtitles).catch(err => {
           console.error('DualSubExtension: Batch translation error:', err);
         });
@@ -2540,6 +2723,14 @@ if (currentPlatform.name === 'youtube') {
     // Start watching for caption changes
     startYouTubeCaptionObserver();
 
+    // Start observing the CC button for native caption toggle
+    // This lets us detect when user disables subtitles natively
+    setTimeout(() => {
+      if (typeof YouTubeAdapter !== 'undefined') {
+        YouTubeAdapter.observeCCButton();
+      }
+    }, 1000); // Wait a bit for CC button to be available
+
     // Mark initialization complete
     _youtubeVideoInitializing = false;
     _youtubeVideoInitialized = true;
@@ -2709,10 +2900,15 @@ if (currentPlatform.name === 'youtube') {
    * Display dual subtitle on YouTube
    */
   function displayYouTubeSubtitle(originalText) {
+    // Don't display our subtitles if extension is disabled - show native captions instead
+    if (!extensionEnabled) {
+      return;
+    }
+
     const wrapper = ensureYouTubeSubtitleOverlay();
     if (!wrapper) return;
 
-    // Hide YouTube's native captions each time we display our own
+    // Hide YouTube's native captions when extension is active
     if (typeof YouTubeAdapter !== 'undefined') {
       YouTubeAdapter.hideNativeCaptions();
     }
@@ -2740,8 +2936,9 @@ if (currentPlatform.name === 'youtube') {
     `;
     wrapper.appendChild(originalSpan);
 
-    // Translation line - only shown when dualSubEnabled is true
-    if (dualSubEnabled) {
+    // Translation line - only shown when dualSubEnabled is true AND translation is needed
+    // Skip translation if source and target languages are the same
+    if (dualSubEnabled && shouldTranslate()) {
       const translatedSpan = document.createElement('span');
       translatedSpan.className = 'dual-sub-translated';
       translatedSpan.textContent = translatedText || 'Translating...';
@@ -2797,7 +2994,13 @@ if (currentPlatform.name === 'youtube') {
     // This listener may fire BEFORE the global listener that normally updates dualSubEnabled
     dualSubEnabled = enabled;
 
-    // Always hide native captions since we show our own overlay with clickable words
+    // Only process if extension is enabled
+    if (!extensionEnabled) {
+      console.info('DualSubExtension: Dual sub toggle ignored - extension is disabled');
+      return;
+    }
+
+    // Hide native captions since we show our own overlay with clickable words
     if (typeof YouTubeAdapter !== 'undefined') {
       YouTubeAdapter.hideNativeCaptions();
     }
@@ -2947,6 +3150,297 @@ document.addEventListener('dscRepeatSubtitle', (e) => {
 document.addEventListener('dscRepeatComplete', (e) => {
   console.info('DualSubExtension: Repeat completed, re-enabling auto-pause');
   isRepeatingSubtitle = false;
+});
+
+// Handle extension toggle from control panel
+document.addEventListener('dscExtensionToggle', (e) => {
+  const { enabled, active, reason, dualSubEnabled: newDualSubEnabled, platform } = e.detail;
+  extensionEnabled = enabled;
+  console.info('DualSubExtension: Extension toggled:', enabled, 'Active:', active, 'Reason:', reason);
+
+  // Sync dualSubEnabled if it was auto-changed
+  if (enabled && typeof newDualSubEnabled === 'boolean' && newDualSubEnabled !== dualSubEnabled) {
+    dualSubEnabled = newDualSubEnabled;
+    console.info('DualSubExtension: Auto-synced dualSubEnabled on extension enable:', dualSubEnabled);
+
+    // Trigger UI update
+    const dualSubEvent = new CustomEvent('dscDualSubToggle', {
+      detail: { enabled: dualSubEnabled, platform: platform, autoTriggered: true }
+    });
+    document.dispatchEvent(dualSubEvent);
+  }
+
+  // Save activation reason to storage for popup sync
+  chrome.storage.sync.set({ activationReason: reason }).catch(err => {
+    console.warn('DualSubExtension: Error saving activation reason:', err);
+  });
+
+  // When extension is disabled, restore native platform behavior
+  if (!enabled) {
+    // Hide extension's subtitle overlay
+    const extensionOverlay = document.getElementById('dual-sub-overlay');
+    if (extensionOverlay) {
+      extensionOverlay.style.display = 'none';
+    }
+    const displayedSubtitlesWrapper = document.getElementById('displayed-subtitles-wrapper');
+    if (displayedSubtitlesWrapper) {
+      displayedSubtitlesWrapper.style.display = 'none';
+    }
+
+    // Restore native captions based on platform
+    if (platform === 'youtube' && typeof YouTubeAdapter !== 'undefined') {
+      YouTubeAdapter.showNativeCaptions();
+    } else if (platform === 'yle') {
+      // For YLE, show the original subtitle wrapper
+      const originalWrapper = document.querySelector('[data-testid="subtitles-wrapper"]');
+      if (originalWrapper) {
+        originalWrapper.style.visibility = 'visible';
+        originalWrapper.style.opacity = '1';
+      }
+    }
+  } else {
+    // When extension is enabled, show our overlay and hide native captions
+    const extensionOverlay = document.getElementById('dual-sub-overlay');
+    if (extensionOverlay) {
+      // Restore flex display explicitly to maintain positioning
+      extensionOverlay.style.display = 'flex';
+    }
+    const displayedSubtitlesWrapper = document.getElementById('displayed-subtitles-wrapper');
+    if (displayedSubtitlesWrapper) {
+      displayedSubtitlesWrapper.style.display = 'flex';
+    }
+
+    // Hide native captions when extension is active
+    if (active) {
+      if (platform === 'youtube' && typeof YouTubeAdapter !== 'undefined') {
+        YouTubeAdapter.hideNativeCaptions();
+      } else if (platform === 'yle') {
+        const originalWrapper = document.querySelector('[data-testid="subtitles-wrapper"]');
+        if (originalWrapper) {
+          originalWrapper.style.visibility = 'hidden';
+        }
+      }
+    }
+  }
+});
+
+// Handle source language change from control integration
+document.addEventListener('dscSourceLanguageChanged', (e) => {
+  const { sourceLanguage, targetLanguage, active, reason, translationNeeded, dualSubEnabled: newDualSubEnabled, platform } = e.detail;
+  // Only update detectedSourceLanguage if new value is not null
+  // This preserves the detected language when CC is turned off, so it can be restored when CC turns back on
+  if (sourceLanguage !== null) {
+    detectedSourceLanguage = sourceLanguage;
+  }
+  console.info('DualSubExtension: Source language changed:', sourceLanguage, 'Target:', targetLanguage, 'Active:', active, 'TranslationNeeded:', translationNeeded, '(detectedSourceLanguage preserved:', detectedSourceLanguage, ')');
+
+  // Sync dualSubEnabled if it was auto-changed
+  if (typeof newDualSubEnabled === 'boolean' && newDualSubEnabled !== dualSubEnabled) {
+    dualSubEnabled = newDualSubEnabled;
+    console.info('DualSubExtension: Auto-synced dualSubEnabled to:', dualSubEnabled);
+
+    // Trigger UI update
+    const event = new CustomEvent('dscDualSubToggle', {
+      detail: { enabled: dualSubEnabled, platform: platform, autoTriggered: true }
+    });
+    document.dispatchEvent(event);
+  }
+
+  // Save activation reason to storage for popup sync
+  chrome.storage.sync.set({ activationReason: reason }).catch(err => {
+    console.warn('DualSubExtension: Error saving activation reason:', err);
+  });
+});
+
+// Handle captions state change (CC button toggle)
+document.addEventListener('dscCaptionsStateChanged', (e) => {
+  const { captionsEnabled, extensionEnabled: newExtensionEnabled, dualSubEnabled: newDualSubEnabled, active, reason, platform } = e.detail;
+  console.info('DualSubExtension: Captions state changed:', captionsEnabled, 'Extension:', newExtensionEnabled, 'DualSub:', newDualSubEnabled);
+
+  // Sync global extensionEnabled variable
+  if (typeof newExtensionEnabled === 'boolean') {
+    extensionEnabled = newExtensionEnabled;
+  }
+
+  // Sync dualSubEnabled if it was auto-changed
+  if (typeof newDualSubEnabled === 'boolean' && newDualSubEnabled !== dualSubEnabled) {
+    dualSubEnabled = newDualSubEnabled;
+    console.info('DualSubExtension: Auto-synced dualSubEnabled to:', dualSubEnabled);
+  }
+});
+
+// Listen for source language detection from platform adapters
+document.addEventListener('yleSourceLanguageDetected', (e) => {
+  const { language, platform } = e.detail;
+  detectedSourceLanguage = language;
+  if (typeof ControlIntegration !== 'undefined') {
+    ControlIntegration.setSourceLanguage(language);
+  }
+  console.info('DualSubExtension: YLE source language detected:', language);
+});
+
+document.addEventListener('youtubeSourceLanguageDetected', (e) => {
+  const { language, platform } = e.detail;
+  detectedSourceLanguage = language;
+  if (typeof ControlIntegration !== 'undefined') {
+    ControlIntegration.setSourceLanguage(language);
+  }
+  console.info('DualSubExtension: YouTube source language detected:', language);
+});
+
+document.addEventListener('html5SourceLanguageDetected', (e) => {
+  const { language, platform } = e.detail;
+  detectedSourceLanguage = language;
+  if (typeof ControlIntegration !== 'undefined') {
+    ControlIntegration.setSourceLanguage(language);
+  }
+  console.info('DualSubExtension: HTML5 source language detected:', language);
+});
+
+// Handle YouTube native captions toggle (when user clicks CC button)
+document.addEventListener('youtubeNativeCaptionsToggled', (e) => {
+  const { enabled, platform, isInitialState } = e.detail;
+  console.info('DualSubExtension: Native YouTube captions toggled:', enabled, 'extensionEnabled:', extensionEnabled, isInitialState ? '(initial state)' : '');
+
+  // Update ControlIntegration captionsEnabled state (CC is master switch)
+  if (typeof ControlIntegration !== 'undefined') {
+    ControlIntegration.setCaptionsEnabled(enabled);
+  }
+
+  if (!enabled) {
+    // CC turned OFF - hide our subtitles, don't show native (since CC is off)
+    const extensionOverlay = document.getElementById('dual-sub-overlay');
+    if (extensionOverlay) {
+      extensionOverlay.style.display = 'none';
+    }
+    const displayedSubtitlesWrapper = document.getElementById('displayed-subtitles-wrapper');
+    if (displayedSubtitlesWrapper) {
+      displayedSubtitlesWrapper.style.display = 'none';
+    }
+
+    // Update activation reason to reflect no subtitles state
+    if (typeof ControlIntegration !== 'undefined') {
+      ControlIntegration.setSourceLanguage(null, { force: true }); // CC OFF - force reset
+    }
+  } else {
+    // CC turned ON - check if extension should be active
+    if (extensionEnabled) {
+      // Extension is ON - show our overlay, hide native captions
+      console.info('DualSubExtension: CC turned ON + Extension ON - showing our subtitles');
+      const extensionOverlay = document.getElementById('dual-sub-overlay');
+      if (extensionOverlay) {
+        extensionOverlay.style.display = 'flex';
+      }
+      const displayedSubtitlesWrapper = document.getElementById('displayed-subtitles-wrapper');
+      if (displayedSubtitlesWrapper) {
+        displayedSubtitlesWrapper.style.display = 'flex';
+      }
+
+      // Hide native captions (we show our enhanced version)
+      if (typeof YouTubeAdapter !== 'undefined') {
+        YouTubeAdapter.hideNativeCaptions();
+      }
+
+      // Restore source language if we have detected one
+      if (detectedSourceLanguage && typeof ControlIntegration !== 'undefined') {
+        ControlIntegration.setSourceLanguage(detectedSourceLanguage);
+      }
+    } else {
+      // Extension is OFF - show native captions
+      console.info('DualSubExtension: CC turned ON + Extension OFF - showing native captions');
+      if (typeof YouTubeAdapter !== 'undefined') {
+        YouTubeAdapter.showNativeCaptions();
+      }
+      // Hide our overlay
+      const extensionOverlay = document.getElementById('dual-sub-overlay');
+      if (extensionOverlay) {
+        extensionOverlay.style.display = 'none';
+      }
+      const displayedSubtitlesWrapper = document.getElementById('displayed-subtitles-wrapper');
+      if (displayedSubtitlesWrapper) {
+        displayedSubtitlesWrapper.style.display = 'none';
+      }
+    }
+  }
+});
+
+// Handle YLE native captions toggle (when user disables subtitles via YLE menu)
+document.addEventListener('yleNativeCaptionsToggled', (e) => {
+  const { enabled, platform } = e.detail;
+  console.info('DualSubExtension: Native YLE captions toggled:', enabled);
+
+  // Update ControlIntegration captionsEnabled state (CC is master switch)
+  if (typeof ControlIntegration !== 'undefined') {
+    ControlIntegration.setCaptionsEnabled(enabled);
+  }
+
+  if (!enabled) {
+    // User disabled native captions - hide our subtitles too
+    const displayedSubtitlesWrapper = document.getElementById('displayed-subtitles-wrapper');
+    if (displayedSubtitlesWrapper) {
+      displayedSubtitlesWrapper.style.display = 'none';
+    }
+
+    // Update activation reason to reflect no subtitles state
+    if (typeof ControlIntegration !== 'undefined') {
+      ControlIntegration.setSourceLanguage(null, { force: true }); // CC OFF - force reset
+    }
+  } else {
+    // User enabled native captions - show our subtitles if extension is enabled
+    if (extensionEnabled) {
+      const displayedSubtitlesWrapper = document.getElementById('displayed-subtitles-wrapper');
+      if (displayedSubtitlesWrapper) {
+        displayedSubtitlesWrapper.style.display = 'flex';
+      }
+
+      // Try to detect the source language from the subtitle content
+      // YLE will dispatch 'yleSourceLanguageDetected' separately if needed
+    }
+  }
+});
+
+// Listen for messages from popup (extension toggle)
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.action === 'extensionToggled') {
+    extensionEnabled = message.enabled;
+    console.info('DualSubExtension: Received extensionToggled from popup:', message.enabled);
+
+    // Update control integration if available
+    if (typeof ControlIntegration !== 'undefined') {
+      ControlIntegration._handleExtensionToggle(message.enabled);
+    }
+
+    sendResponse({ success: true });
+  }
+  return true; // Keep channel open for async response
+});
+
+// Listen for storage changes (cross-tab sync)
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== 'sync') return;
+
+  if (changes.extensionEnabled) {
+    const newEnabled = changes.extensionEnabled.newValue !== false;
+    if (newEnabled !== extensionEnabled) {
+      extensionEnabled = newEnabled;
+      console.info('DualSubExtension: Extension enabled changed via storage:', newEnabled);
+
+      // Update control integration if available
+      if (typeof ControlIntegration !== 'undefined') {
+        ControlIntegration.updateState({ extensionEnabled: newEnabled });
+      }
+    }
+  }
+
+  if (changes.targetLanguage) {
+    targetLanguage = changes.targetLanguage.newValue || 'EN-US';
+    console.info('DualSubExtension: Target language changed via storage:', targetLanguage);
+
+    // Update control integration and recalculate activation
+    if (typeof ControlIntegration !== 'undefined') {
+      ControlIntegration.setTargetLanguage(targetLanguage);
+    }
+  }
 });
 
 // Update ControlIntegration with subtitle timestamps when they change

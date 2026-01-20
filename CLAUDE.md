@@ -513,6 +513,110 @@ this._subtitles = subtitles.map(sub => ({ ...sub }));
 
 **Key insight:** When storing arrays that may be modified elsewhere, ALWAYS copy them. Watch out for `.length = 0` pattern which clears arrays in-place.
 
+### 13. YouTube "Same Lang" Bug - Hardcoded Source Language (Session 2026-01-20)
+**Problem:** On YouTube, the extension always showed "Same Lang" badge even when source (Finnish) and target (English) languages were different.
+
+**Root Cause (Two-part):**
+1. In `contentscript.js` line ~330, the source language was hardcoded:
+```javascript
+// WRONG - hardcoded 'en' for YouTube
+sourceLanguage: currentPlatform.name === 'youtube' ? 'en' : 'fi'
+```
+
+2. When YouTube detected the actual source language ('fi'), it set `ytSourceLanguage` but NOT `detectedSourceLanguage`, so the detected value was never passed to `ControlIntegration.init()`.
+
+**Solution:**
+1. In `contentscript.js`, pass `detectedSourceLanguage` instead of hardcoded value:
+```javascript
+// CORRECT - use detected language
+const initOptions = { dualSubEnabled, autoPauseEnabled, playbackSpeed };
+if (detectedSourceLanguage) {
+  initOptions.sourceLanguage = detectedSourceLanguage;
+}
+const panel = await ControlIntegration.init(currentPlatform.name, initOptions);
+```
+
+2. In the YouTube subtitle loading handler (~line 2373), also set `detectedSourceLanguage`:
+```javascript
+if (language !== ytSourceLanguage) {
+  ytSourceLanguage = language;
+  detectedSourceLanguage = language;  // ADD THIS
+  // Also call ControlIntegration.setSourceLanguage(language) if initialized
+}
+```
+
+**Key files:**
+- `contentscript.js` lines ~326-336 (init options)
+- `contentscript.js` lines ~2373-2385 (YouTube source language switch)
+
+**Key insight:** When implementing dynamic language detection, ensure ALL code paths that detect language also update the global `detectedSourceLanguage` variable, not just platform-specific variables.
+
+### 13. Extension Context Invalidated Error (PENDING FIX)
+**Problem:** After switching tabs or changing language settings, the extension panel stops working. Console shows "Extension context invalidated" errors.
+
+**Root Cause:** When the extension is reloaded (manually or via Chrome update), the content scripts on already-open pages keep running but lose access to `chrome.*` APIs. Any call to `chrome.storage.sync.get()`, `chrome.runtime.sendMessage()`, etc. will throw "Extension context invalidated".
+
+**Symptoms:**
+- "DualSubExtension: Error loading preferences: Error: Extension context invalidated"
+- "Uncaught Error: Extension context invalidated"
+- "Google Translate fetch error: Failed to fetch"
+- Panel doesn't respond to keyboard shortcuts
+- Translations stop loading
+
+**Current State (as of 2025-01-20):**
+- `_loadPreferences()` in `control-integration.js:234` has try-catch but other code paths may not
+- `getEffectiveTargetLanguage()` in `utils.js:99` has try-catch
+- Multiple uncaught errors suggest other chrome API calls lack error handling
+
+**Needed Fix:**
+1. Add a global check for extension context validity
+2. Show user-friendly message: "Extension updated. Please refresh the page."
+3. Wrap ALL chrome.* API calls in try-catch with context validation
+4. Consider using a wrapper function for all chrome API calls
+
+**Key files:**
+- `controls/control-integration.js` - `_loadPreferences()`, event handlers
+- `utils.js` - `getEffectiveTargetLanguage()`, storage utilities
+- `contentscript.js` - translation calls, storage operations
+- `background.js` - message handlers
+
+**Workaround:** Refresh the page after the extension is reloaded.
+
+### 14. Same Language Mode Disabling ALL Controls (Session 2026-01-20)
+**Problem:** On YLE with source=target language (Finnish→Finnish), ALL control panel features were disabled (skip/repeat/speed/download grayed out), not just the DS (Dual Subtitles) toggle.
+
+**Root Cause:** In `control-panel.js`, the `featuresDisabled` logic incorrectly used `isActive`:
+```javascript
+// Line 258 - WRONG
+const featuresDisabled = !extensionEnabled || !isActive;
+
+// Line 652-653 - WRONG
+const { extensionEnabled, isActive } = this.state;
+const shouldDisable = !extensionEnabled || !isActive;
+```
+
+When same language is detected, `isActive` becomes `false` (because translation isn't needed), which caused ALL features to be disabled. But playback features (skip/repeat/speed/download) should work even when translation isn't needed.
+
+**Solution:** Only consider `extensionEnabled` for disabling features:
+```javascript
+// Line 258-260 - CORRECT
+// Features (skip/repeat/speed/download) are only disabled when extension is OFF
+// NOT when same language - user should still be able to use playback features
+const featuresDisabled = !extensionEnabled;
+
+// Line 652-655 - CORRECT
+const { extensionEnabled } = this.state;
+const shouldDisable = !extensionEnabled;
+```
+
+The DS toggle already has its own separate disable logic via `dualSubDisabled = !translationNeeded`.
+
+**Key files:**
+- `controls/control-panel.js` lines ~258-260 (HTML generation)
+- `controls/control-panel.js` lines ~652-655 (`_updateFeaturesDisabledState()`)
+
+**Key insight:** `isActive` indicates whether TRANSLATION is active, but playback features should work independently. Only the DS toggle should be disabled when translation isn't needed.
+
 ---
 
 ## Debugging Methodology (Session 2025-01-20)
@@ -625,6 +729,24 @@ See "YLE Menu Focus Issue" above - likely focusVideo() stealing focus.
 - [ ] Keyboard shortcuts (D, comma, period, R, P, [, ], A, Space)
 - [ ] Translation providers (Google, DeepL, Claude, Gemini, xAI)
 - [ ] Extension options page
+
+### Cross-Platform Language Switch Test (CRITICAL)
+This test catches race conditions and state management bugs when switching languages and tabs.
+
+**Steps:**
+1. [ ] Start on YouTube with Finnish video, target=English → dual sub ON, translations showing
+2. [ ] Change target to Simplified Chinese via popup → dual sub should still work
+3. [ ] Change target to Finnish (same as source) → dual sub should auto-disable (same language)
+4. [ ] Switch to YLE tab → verify panel state, 'D' toggle responds, subtitles work
+5. [ ] Change target back to English → verify dual sub re-enables automatically
+6. [ ] Switch back to YouTube → verify still working
+7. [ ] Repeat cycle 2-3 times to catch intermittent bugs
+
+**Watch for:**
+- "Extension context invalidated" errors in console
+- Panel not responding to 'D' key
+- Dual sub stuck OFF when it should be ON (or vice versa)
+- Translations not loading after language switch
 
 ---
 

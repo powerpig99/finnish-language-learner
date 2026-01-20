@@ -7,7 +7,8 @@
 
 const YLEAdapter = {
   name: 'yle',
-  sourceLanguage: 'FI',
+  sourceLanguage: null, // Dynamic - detected from subtitles
+  _detectedLanguage: null,
 
   // DOM Selectors specific to YLE Areena
   SELECTORS: {
@@ -319,6 +320,39 @@ const YLEAdapter = {
    */
   positionSubtitleWrapper(displayWrapper, originalWrapper) {
     originalWrapper.parentNode.insertBefore(displayWrapper, originalWrapper.nextSibling);
+  },
+
+  /**
+   * Set the detected source language from subtitle analysis
+   * @param {string} langCode - Detected language code (e.g., 'fi', 'sv')
+   */
+  setDetectedLanguage(langCode) {
+    this._detectedLanguage = langCode;
+    this.sourceLanguage = langCode;
+    console.info('DualSubExtension: YLE source language detected:', langCode);
+
+    // Dispatch event for other modules to react
+    const event = new CustomEvent('yleSourceLanguageDetected', {
+      bubbles: true,
+      detail: { language: langCode, platform: 'yle' }
+    });
+    document.dispatchEvent(event);
+  },
+
+  /**
+   * Get the current source language (detected or default)
+   * @returns {string|null} - Source language code or null if not detected
+   */
+  getSourceLanguage() {
+    return this._detectedLanguage || this.sourceLanguage;
+  },
+
+  /**
+   * Reset detected language (e.g., on navigation)
+   */
+  resetDetectedLanguage() {
+    this._detectedLanguage = null;
+    this.sourceLanguage = null;
   }
 };
 
