@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Language Learning Subtitles",
-  "version": "4.0.0",
+  "version": "4.0.1",
   "description": "Learn languages with dual subtitles, popup dictionary, and playback controls on YLE, YouTube, and HTML5 videos.",
   "icons": {
     "16": "icons/icon.png",
