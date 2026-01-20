@@ -428,13 +428,14 @@ const ControlIntegration = {
     }
 
     // Check if subtitles are loaded - try to sync from global fullSubtitles if empty
-    // NOTE: Only use fullSubtitles here - it's the platform-agnostic array that ALL platforms populate
+    // NOTE: Only use window.fullSubtitles here - it's the platform-agnostic array that ALL platforms populate
     // Do NOT add platform-specific variables (like ytCurrentSubtitles) to this unified module
     if (!this._subtitles || this._subtitles.length === 0) {
       // Fallback: try to sync from global fullSubtitles array (handles timing issues)
-      if (typeof fullSubtitles !== 'undefined' && fullSubtitles.length > 0) {
-        console.info('DualSubExtension: Syncing subtitles from global fullSubtitles array for download');
-        this.setSubtitles(fullSubtitles);
+      // Access via window since it's defined in contentscript.js scope
+      if (typeof window.fullSubtitles !== 'undefined' && window.fullSubtitles.length > 0) {
+        console.info('DualSubExtension: Syncing subtitles from window.fullSubtitles array for download');
+        this.setSubtitles(window.fullSubtitles);
       }
 
       // Check again after fallback sync

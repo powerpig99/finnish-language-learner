@@ -334,8 +334,10 @@ const subtitleTimestamps = [];
 /** @type {Array<{startTime: number, endTime: number, text: string}>}
  * Array of full subtitle data with start/end times
  * Used for repeat subtitle feature - accumulates like subtitleTimestamps
+ * Exported to window for access from control-integration.js fallback
  */
 const fullSubtitles = [];
+window.fullSubtitles = fullSubtitles;
 
 /** @type {Map<string, string>}
  * In-memory cache for word translations, key is normalized word, value is translation
@@ -525,7 +527,8 @@ async function handleBatchTranslation(subtitles) {
   console.info(`YleDualSubExtension: Pre-populated ${subtitleTimestamps.length} timestamps and ${fullSubtitles.length} full subtitles`);
 
   // Sync ACCUMULATED subtitles with ControlIntegration for skip/repeat functionality
-  if (typeof ControlIntegration !== 'undefined' && ControlIntegration.isInitialized()) {
+  // Note: Call setSubtitles even if panel isn't mounted yet - it just stores the data
+  if (typeof ControlIntegration !== 'undefined') {
     ControlIntegration.setSubtitles(fullSubtitles);
     console.info('YleDualSubExtension: Synced', fullSubtitles.length, 'accumulated subtitles with ControlIntegration');
   }
@@ -2356,7 +2359,8 @@ if (currentPlatform.name === 'youtube') {
       console.info(`DualSubExtension: Populated ${subtitleTimestamps.length} timestamps and ${fullSubtitles.length} full subtitles`);
 
       // Update ControlIntegration with subtitles for navigation
-      if (typeof ControlIntegration !== 'undefined' && ControlIntegration.isInitialized()) {
+      // Note: Call setSubtitles even if panel isn't mounted yet - it just stores the data
+      if (typeof ControlIntegration !== 'undefined') {
         ControlIntegration.setSubtitles(fullSubtitles);
       }
 
