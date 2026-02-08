@@ -281,24 +281,39 @@ const ControlIntegration = {
    * @param {boolean} enabled - Whether CC is ON
    */
   setCaptionsEnabled(enabled) {
-    console.info('DualSubExtension: [DIAG] setCaptionsEnabled called with:', enabled, 'panel:', !!this._panel, 'mounted:', this._panel?.isMounted());
+    console.info('DualSubExtension: setCaptionsEnabled:', enabled);
 
-    // Update panel UI if mounted (just for display purposes)
-    if (this._panel) {
-      this._panel.updateState({
-        sourceLanguage: this._state.sourceLanguage
-      });
-    }
+    if (!enabled) {
+      // CC off: disable extension in-memory only (don't persist to storage — that's only for explicit user toggle)
+      this._state.extensionEnabled = false;
 
-    // Dispatch event for contentscript
-    const event = new CustomEvent('dscCaptionsStateChanged', {
-      detail: {
-        captionsEnabled: enabled,
-        extensionEnabled: this._state.extensionEnabled,
-        dualSubEnabled: this._state.dualSubEnabled
+      if (this._panel) {
+        this._panel.updateState({
+          ccEnabled: false,
+          extensionEnabled: false,
+          sourceLanguage: null
+        });
       }
-    });
-    document.dispatchEvent(event);
+
+      document.dispatchEvent(new CustomEvent('dscCaptionsStateChanged', {
+        detail: { captionsEnabled: false, extensionEnabled: false, dualSubEnabled: this._state.dualSubEnabled }
+      }));
+    } else {
+      // CC on: re-enable extension in-memory only (don't persist to storage — that's only for explicit user toggle)
+      this._state.extensionEnabled = true;
+
+      if (this._panel) {
+        this._panel.updateState({
+          ccEnabled: true,
+          extensionEnabled: true,
+          sourceLanguage: this._state.sourceLanguage
+        });
+      }
+
+      document.dispatchEvent(new CustomEvent('dscCaptionsStateChanged', {
+        detail: { captionsEnabled: true, extensionEnabled: true, dualSubEnabled: this._state.dualSubEnabled }
+      }));
+    }
   },
 
   /**
@@ -475,18 +490,7 @@ const ControlIntegration = {
    * @private
    */
   _handleRepeatSubtitle() {
-    // Dispatch start event BEFORE calling repeat (to disable auto-pause)
-    const startEvent = new CustomEvent('dscRepeatSubtitle', {
-      detail: { phase: 'start' }
-    });
-    document.dispatchEvent(startEvent);
-
-    ControlActions.repeatCurrentSubtitle(this._subtitles, () => {
-      console.info('DualSubExtension: Repeat completed');
-      // Dispatch end event when repeat completes
-      const endEvent = new CustomEvent('dscRepeatComplete', { detail: {} });
-      document.dispatchEvent(endEvent);
-    });
+    ControlActions.repeatCurrentSubtitle(this._subtitles);
   },
 
   /**

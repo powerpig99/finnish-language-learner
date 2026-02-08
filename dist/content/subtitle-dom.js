@@ -222,15 +222,13 @@ function addContentToDisplayedSubtitlesWrapper(displayedSubtitlesWrapper, origin
  */
 // Track last displayed subtitle to avoid unnecessary re-renders
 let lastDisplayedSubtitleText = "";
-// Track whether YLE subtitles were previously disabled (to detect re-enable)
-let yleSubtitlesWereDisabled = false;
 function handleSubtitlesWrapperMutation(mutation) {
     // When extension is off, don't touch the original subtitles at all
     if (!shouldProcessSubtitles()) {
         return;
     }
     const originalSubtitlesWrapper = mutation.target;
-    originalSubtitlesWrapper.style.display = "none";
+    originalSubtitlesWrapper.classList.add('dsc-original-hidden');
     const displayedSubtitlesWrapper = createAndPositionDisplayedSubtitlesWrapper(originalSubtitlesWrapper);
     if (mutation.addedNodes.length > 0) {
         const finnishTextSpans = mutation.target.querySelectorAll("span");
@@ -244,17 +242,6 @@ function handleSubtitlesWrapperMutation(mutation) {
         // Skip re-render if the text hasn't changed (prevents flicker when controls appear/disappear)
         if (currentFinnishText === lastDisplayedSubtitleText && displayedSubtitlesWrapper.innerHTML !== "") {
             return;
-        }
-        // If subtitles were previously disabled and now have content, they've been re-enabled
-        if (yleSubtitlesWereDisabled && currentFinnishText.length > 0) {
-            console.info('DualSubExtension: YLE subtitles appear to be re-enabled');
-            yleSubtitlesWereDisabled = false;
-            // Dispatch event for other modules to react
-            const event = new CustomEvent('yleNativeCaptionsToggled', {
-                bubbles: true,
-                detail: { enabled: true }
-            });
-            document.dispatchEvent(event);
         }
         lastDisplayedSubtitleText = currentFinnishText;
         displayedSubtitlesWrapper.innerHTML = "";
@@ -286,17 +273,6 @@ function handleSubtitlesWrapperMutation(mutation) {
             displayedSubtitlesWrapper.innerHTML = "";
             lastDisplayedSubtitleText = "";
             setCurrentSubtitleEndTime(null);
-            // Check if this is a subtitle disable (removed nodes but no new ones)
-            if (mutation.removedNodes.length > 0) {
-                console.info('DualSubExtension: YLE subtitles appear to be disabled (wrapper emptied)');
-                yleSubtitlesWereDisabled = true;
-                // Dispatch event for other modules to react
-                const event = new CustomEvent('yleNativeCaptionsToggled', {
-                    bubbles: true,
-                    detail: { enabled: false }
-                });
-                document.dispatchEvent(event);
-            }
         }
     }
 }

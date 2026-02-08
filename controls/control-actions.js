@@ -59,6 +59,11 @@ const ControlActions = {
       // No subtitle found, skip back 5 seconds as fallback
       video.currentTime = Math.max(0, currentTime - 5);
     }
+
+    // Resume playback if paused (e.g., after auto-pause)
+    if (video.paused) {
+      video.play();
+    }
   },
 
   /**
@@ -79,6 +84,11 @@ const ControlActions = {
     } else {
       // No next subtitle found, skip forward 5 seconds as fallback
       video.currentTime = currentTime + 5;
+    }
+
+    // Resume playback if paused (e.g., after auto-pause)
+    if (video.paused) {
+      video.play();
     }
   },
 
@@ -116,6 +126,9 @@ const ControlActions = {
     if (currentSubIndex === -1) {
       console.log(`[Repeat] no match found, seeking to first subtitle at ${subtitles[0].startTime.toFixed(3)}`);
       video.currentTime = subtitles[0].startTime;
+      if (video.paused) {
+        video.play();
+      }
       return;
     }
 
@@ -123,10 +136,10 @@ const ControlActions = {
     console.log(`[Repeat] matched sub[${currentSubIndex}]: [${currentSub.startTime.toFixed(3)}-${currentSub.endTime.toFixed(3)}], seeking from ${currentTime.toFixed(3)} to ${currentSub.startTime.toFixed(3)}`);
     video.currentTime = currentSub.startTime;
 
-    // Verify seek completed
-    video.addEventListener('seeked', () => {
-      console.log(`[Repeat] seeked done, now at ${video.currentTime.toFixed(3)}`);
-    }, { once: true });
+    // Resume playback if paused (e.g., after auto-pause)
+    if (video.paused) {
+      video.play();
+    }
   },
 
   /**

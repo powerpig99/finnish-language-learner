@@ -181,7 +181,7 @@ document.addEventListener("change", (e) => {
                 dualSubEnabled = false;
                 return;
             }
-            originalSubtitlesWrapper.style.display = "none";
+            originalSubtitlesWrapper.classList.add('dsc-original-hidden');
             const displayedSubtitlesWrapper = createAndPositionDisplayedSubtitlesWrapper(originalSubtitlesWrapper);
             displayedSubtitlesWrapper.innerHTML = "";
             displayedSubtitlesWrapper.style.display = "flex";
@@ -217,7 +217,7 @@ document.addEventListener('dscDualSubToggle', (e) => {
     if (enabled) {
         const originalSubtitlesWrapper = getOriginalSubtitlesWrapper();
         if (originalSubtitlesWrapper) {
-            originalSubtitlesWrapper.style.display = 'none';
+            originalSubtitlesWrapper.classList.add('dsc-original-hidden');
             const displayedSubtitlesWrapper = createAndPositionDisplayedSubtitlesWrapper(originalSubtitlesWrapper);
             displayedSubtitlesWrapper.innerHTML = '';
             displayedSubtitlesWrapper.style.display = 'flex';
@@ -287,8 +287,7 @@ document.addEventListener('dscExtensionToggle', (e) => {
         // Show the original YLE subtitle wrapper
         const originalWrapper = getOriginalSubtitlesWrapper();
         if (originalWrapper) {
-            originalWrapper.style.visibility = 'visible';
-            originalWrapper.style.opacity = '1';
+            originalWrapper.classList.remove('dsc-original-hidden');
         }
     }
     else {
@@ -305,7 +304,7 @@ document.addEventListener('dscExtensionToggle', (e) => {
         // Hide native YLE captions when extension is enabled
         const originalWrapper = getOriginalSubtitlesWrapper();
         if (originalWrapper) {
-            originalWrapper.style.visibility = 'hidden';
+            originalWrapper.classList.add('dsc-original-hidden');
         }
         // Re-schedule auto-pause if it's enabled
         if (autoPauseEnabled) {
@@ -342,30 +341,34 @@ document.addEventListener('yleSourceLanguageDetected', (e) => {
 document.addEventListener('yleNativeCaptionsToggled', (e) => {
     const { enabled } = e.detail;
     console.info('DualSubExtension: Native YLE captions toggled:', enabled);
-    // Update ControlIntegration captionsEnabled state (CC is master switch)
+    // Update ControlIntegration state (updates panel + saves to storage)
     if (typeof ControlIntegration !== 'undefined') {
         ControlIntegration.setCaptionsEnabled(enabled);
     }
     if (!enabled) {
-        // User disabled native captions - hide our subtitles too
+        // CC off: disable extension in content script context
+        extensionEnabled = false;
+        clearAutoPause();
         const displayedSubtitlesWrapper = document.getElementById('displayed-subtitles-wrapper');
         if (displayedSubtitlesWrapper) {
             displayedSubtitlesWrapper.style.display = 'none';
         }
-        // Update activation reason to reflect no subtitles state
-        if (typeof ControlIntegration !== 'undefined') {
-            ControlIntegration.setSourceLanguage(null, { force: true }); // CC OFF - force reset
-        }
+        // Don't touch original wrapper — YLE is hiding it
     }
     else {
-        // User enabled native captions - show our subtitles if extension is enabled
-        if (extensionEnabled) {
-            const displayedSubtitlesWrapper = document.getElementById('displayed-subtitles-wrapper');
-            if (displayedSubtitlesWrapper) {
-                displayedSubtitlesWrapper.style.display = 'flex';
-            }
-            // Try to detect the source language from the subtitle content
-            // YLE will dispatch 'yleSourceLanguageDetected' separately if needed
+        // CC on: re-enable extension in content script context
+        extensionEnabled = true;
+        const displayedSubtitlesWrapper = document.getElementById('displayed-subtitles-wrapper');
+        if (displayedSubtitlesWrapper) {
+            displayedSubtitlesWrapper.style.display = 'flex';
+        }
+        // Re-hide original wrapper for extension processing
+        const originalWrapper = getOriginalSubtitlesWrapper();
+        if (originalWrapper) {
+            originalWrapper.classList.add('dsc-original-hidden');
+        }
+        if (autoPauseEnabled) {
+            scheduleAutoPause();
         }
     }
 });

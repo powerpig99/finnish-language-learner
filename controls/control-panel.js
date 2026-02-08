@@ -30,7 +30,8 @@ class ControlPanel {
       availableLanguages: [],
       showWarning: false,
       warningMessage: '',
-      extensionEnabled: true
+      extensionEnabled: true,
+      ccEnabled: true
     }, options.initialState || {});
 
     // Callbacks for all controls
@@ -406,7 +407,7 @@ class ControlPanel {
       config: config,
       callbacks: {
         onDualSubToggle: () => {
-          // Simplified: no restrictions, user controls everything
+          if (!this.state.extensionEnabled) return;
           const newState = !this.state.dualSubEnabled;
           this.state.dualSubEnabled = newState;
           if (this._elements.dualSubCheckbox) {
@@ -418,6 +419,7 @@ class ControlPanel {
           this.callbacks.onDualSubToggle(newState);
         },
         onAutoPauseToggle: () => {
+          if (!this.state.extensionEnabled) return;
           const newState = !this.state.autoPauseEnabled;
           this.state.autoPauseEnabled = newState;
           if (this._elements.autoPauseCheckbox) {
@@ -429,15 +431,19 @@ class ControlPanel {
           this.callbacks.onAutoPauseToggle(newState);
         },
         onPrevSubtitle: () => {
+          if (!this.state.extensionEnabled) return;
           this.callbacks.onPrevSubtitle();
         },
         onNextSubtitle: () => {
+          if (!this.state.extensionEnabled) return;
           this.callbacks.onNextSubtitle();
         },
         onRepeatSubtitle: () => {
+          if (!this.state.extensionEnabled) return;
           this.callbacks.onRepeatSubtitle();
         },
         onSpeedChange: (increment) => {
+          if (!this.state.extensionEnabled) return;
           const currentSpeed = this.state.playbackSpeed;
           let newSpeed = Math.round((currentSpeed + increment) * 100) / 100;
           newSpeed = Math.max(0.5, Math.min(2.0, newSpeed));
@@ -451,6 +457,7 @@ class ControlPanel {
           this.callbacks.onPlayPause();
         },
         onDownloadAudio: () => {
+          if (!this.state.extensionEnabled) return;
           this.callbacks.onDownloadAudio();
         }
       }
@@ -472,6 +479,14 @@ class ControlPanel {
     }
     if (this._elements.extensionToggle) {
       this._elements.extensionToggle.classList.toggle('active', this.state.extensionEnabled);
+    }
+
+    // Sync CC-enabled state on the master toggle
+    if (this._elements.extensionCheckbox) {
+      this._elements.extensionCheckbox.disabled = !this.state.ccEnabled;
+    }
+    if (this._elements.extensionToggle) {
+      this._elements.extensionToggle.classList.toggle('dsc-switch-blocked', !this.state.ccEnabled);
     }
 
     // Update features disabled state
@@ -515,6 +530,14 @@ class ControlPanel {
 
     const shouldDisable = !this.state.extensionEnabled;
     this._elements.featuresContainer.classList.toggle('dsc-disabled', shouldDisable);
+
+    // When CC is off, disable the master toggle too
+    if (this._elements.extensionCheckbox) {
+      this._elements.extensionCheckbox.disabled = !this.state.ccEnabled;
+    }
+    if (this._elements.extensionToggle) {
+      this._elements.extensionToggle.classList.toggle('dsc-switch-blocked', !this.state.ccEnabled);
+    }
   }
 
   /**

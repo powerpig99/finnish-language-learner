@@ -210,8 +210,9 @@ function setupVideoSpeedControl() {
     video.addEventListener('play', applyPlaybackSpeed, { once: true });
 
     // Auto-pause event listeners
-    // On seek (skip/repeat), schedule auto-pause for the new subtitle
+    // On seek (skip/repeat), clear stale endTime and schedule auto-pause for the new subtitle
     video.addEventListener('seeked', () => {
+      _currentSubtitleEndTime = null; // Clear stale value, force fresh lookup
       if (autoPauseEnabled && extensionEnabled) {
         scheduleAutoPause();
       }
@@ -376,8 +377,16 @@ function scheduleAutoPause() {
   // For seeked/play/ratechange events, we need to look up by currentTime.
   let endTime = _currentSubtitleEndTime;
 
+  // Check if stored endTime is stale (already passed) — if so, fall through to lookup
+  if (endTime !== null) {
+    const pauseAt = endTime - 0.05;
+    if (pauseAt <= video.currentTime) {
+      endTime = null; // Stale, fall through to lookup
+    }
+  }
+
   if (endTime === null) {
-    // Fallback: look up by currentTime (for seeked/play/ratechange events)
+    // Fallback: look up by currentTime (for seeked/play/ratechange events, or stale endTime)
     const subtitles = window.fullSubtitles;
     if (!subtitles || subtitles.length === 0) {
       return;

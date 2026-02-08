@@ -521,6 +521,16 @@ body.yle-mouse-active nav[class*="Navigation_root"] {
 
 /* Font sizes are set dynamically via JavaScript based on user settings */
 
+/* Hide original wrapper without affecting display property
+   (display is reserved for YLE's CC toggle detection by our style observer) */
+.dsc-original-hidden {
+  visibility: hidden !important;
+  position: absolute !important;
+  width: 0 !important;
+  height: 0 !important;
+  overflow: hidden !important;
+}
+
 /* ============================================
    Unified Control Panel Styles (dsc-* prefix)
    ============================================ */
