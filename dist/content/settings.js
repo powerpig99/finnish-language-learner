@@ -208,6 +208,31 @@ function setupVideoSpeedControl() {
                 scheduleAutoPause();
             }
         });
+        // CC ON/OFF detection via TextTrack API
+        // YLE sets track.mode to 'hidden' when CC is on, 'disabled' when off.
+        // The 'change' event fires immediately when the user toggles CC in YLE's menu.
+        // No length guard — tracks load asynchronously after the video element appears.
+        let _ccWasActive = Array.from(video.textTracks).some(t => t.mode !== 'disabled');
+        video.textTracks.addEventListener('change', () => {
+            const ccActive = Array.from(video.textTracks).some(t => t.mode !== 'disabled');
+            if (_ccWasActive && !ccActive) {
+                _ccWasActive = false;
+                console.info('DualSubExtension: CC turned OFF (textTrack mode → disabled)');
+                document.dispatchEvent(new CustomEvent('yleNativeCaptionsToggled', {
+                    bubbles: true,
+                    detail: { enabled: false }
+                }));
+            }
+            else if (!_ccWasActive && ccActive) {
+                _ccWasActive = true;
+                console.info('DualSubExtension: CC turned ON (textTrack mode → active)');
+                document.dispatchEvent(new CustomEvent('yleNativeCaptionsToggled', {
+                    bubbles: true,
+                    detail: { enabled: true }
+                }));
+            }
+        });
+        console.info('DualSubExtension: TextTrack CC detection initialized, ccActive:', _ccWasActive);
     }
 }
 // Initial setup after a short delay

@@ -375,64 +375,8 @@ function isVideoElementAppearMutation(mutation: MutationRecord) {
   }
 }
 
-// YLE MutationObserver for subtitle handling
-// Track subtitles wrapper visibility for CC ON/OFF detection
-let yleWrapperStyleObserver: MutationObserver | null = null;
-let yleWrapperWasVisible = false;
-
-/**
- * Set up a style observer on the subtitles wrapper to detect CC ON/OFF
- * YLE hides the wrapper with display:none when CC is turned off
- */
-function setupYleWrapperStyleObserver(wrapper: HTMLElement) {
-  if (yleWrapperStyleObserver) {
-    yleWrapperStyleObserver.disconnect();
-  }
-
-  // Initialize visibility state
-  yleWrapperWasVisible = getComputedStyle(wrapper).display !== 'none';
-  console.info('DualSubExtension: YLE wrapper style observer initialized, visible:', yleWrapperWasVisible);
-
-  yleWrapperStyleObserver = new MutationObserver((mutations) => {
-    for (const mutation of mutations) {
-      // Log all attribute changes for diagnostic purposes
-      console.info('DualSubExtension: Wrapper attribute changed:',
-        mutation.attributeName,
-        'old:', mutation.oldValue,
-        'new:', (wrapper as HTMLElement).getAttribute(mutation.attributeName || ''),
-        'computedDisplay:', getComputedStyle(wrapper).display
-      );
-
-      // Check computed display on ANY attribute change (not just style)
-      // YLE may hide CC via class changes, style changes, or other attributes
-      const isVisible = getComputedStyle(wrapper).display !== 'none';
-
-      if (yleWrapperWasVisible && !isVisible) {
-        // CC turned OFF
-        console.info('DualSubExtension: YLE CC turned OFF (wrapper hidden)');
-        yleWrapperWasVisible = false;
-        document.dispatchEvent(new CustomEvent('yleNativeCaptionsToggled', {
-          bubbles: true,
-          detail: { enabled: false }
-        }));
-      } else if (!yleWrapperWasVisible && isVisible) {
-        // CC turned ON
-        console.info('DualSubExtension: YLE CC turned ON (wrapper shown)');
-        yleWrapperWasVisible = true;
-        document.dispatchEvent(new CustomEvent('yleNativeCaptionsToggled', {
-          bubbles: true,
-          detail: { enabled: true }
-        }));
-      }
-    }
-  });
-
-  yleWrapperStyleObserver.observe(wrapper, {
-    attributes: true,
-    attributeOldValue: true
-    // No attributeFilter — watch ALL attribute changes to detect CC toggle
-  });
-}
+// CC ON/OFF detection is now handled by TextTrack API in settings.ts
+// (setupVideoSpeedControl → video.textTracks 'change' event)
 
 const observer = new MutationObserver((mutations) => {
   mutations.forEach((mutation) => {
@@ -441,12 +385,6 @@ const observer = new MutationObserver((mutations) => {
         // ALWAYS process subtitle mutations to show clickable original text
         // Translation line visibility is controlled inside the handler
         handleSubtitlesWrapperMutation(mutation);
-
-        // Set up style observer on wrapper if not already done
-        const wrapper = getNativeSubtitlesWrapper();
-        if (wrapper && !yleWrapperStyleObserver) {
-          setupYleWrapperStyleObserver(wrapper);
-        }
         return;
       }
       if (isVideoElementAppearMutation(mutation)) {
