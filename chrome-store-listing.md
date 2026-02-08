@@ -28,8 +28,7 @@ Key features:
 Translation providers:
 • Google Translate (free, no setup)
 • DeepL (high quality, free API available)
-• Claude, Gemini, Grok
-• Kimi 2.5 for Kimi Coding
+• Claude, Gemini, Grok, Kimi (AI-powered with context)
 
 Keyboard shortcuts:
 • D: Toggle dual subtitles
