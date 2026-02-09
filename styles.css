@@ -425,6 +425,16 @@ div[class*="NextEpisodeOverlay__NextEpisode"] {
   visibility: hidden !important;
 }
 
+/* Hide share overlay button (distracting during auto-pause) */
+div[class*="VideoOverlayButton__OverlayButtonWrapper"] {
+  display: none !important;
+}
+
+/* Hide play/pause action indicator animation */
+div[class*="ActionIndicator__SimpleIndicator"] {
+  display: none !important;
+}
+
 /* ============================================
    Mouse inactivity: Hide YLE controls
    ============================================ */
