@@ -19,9 +19,9 @@
 ---
 
 ## Project Overview
-A Chrome extension (v5.2.0, Manifest v3) that provides dual subtitles (original + translation), popup dictionary, and playback controls for YLE Areena (Finnish public broadcasting).
+A Chrome extension (v5.3.0, Manifest v3) that provides dual subtitles (original + translation), popup dictionary, and playback controls for YLE Areena (Finnish public broadcasting).
 
-**Chrome Web Store:** v5.1.0 submitted January 2026 (pending review)
+**Chrome Web Store:** v5.3.0 submitted February 2026 (pending review)
 
 **Supported Platform:** YLE Areena only (`https://areena.yle.fi/*`)
 
