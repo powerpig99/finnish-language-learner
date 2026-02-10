@@ -260,11 +260,12 @@ fullSubtitles.sort((a, b) => a.startTime - b.startTime);
 ControlIntegration.setSubtitles(fullSubtitles);
 ```
 
-### 6. YLE Mouse Activity
-YLE hides controls on mouse inactivity. To show controls programmatically:
+### 6. YLE Mouse Activity & Cursor
+Controls only show when mouse enters edge zones of the player (bottom 80px or top 60px), not on any mouse movement. Cursor auto-hides after 2.5s of inactivity via `yle-cursor-active` class. To show controls programmatically:
 ```javascript
 const playerUI = document.querySelector('[class*="PlayerUI"]');
-playerUI.classList.add('yle-mouse-active');
+playerUI.classList.add('yle-mouse-active');   // shows controls
+playerUI.classList.add('yle-cursor-active');  // shows cursor
 ```
 
 ### 7. YLE Video Overlay Closes When Showing Modals (IMPORTANT)
@@ -584,6 +585,30 @@ function getSubtitleTextElements(container: HTMLElement): HTMLElement[] {
 - The `addContentToDisplayedSubtitlesWrapper` parameter type changed from `NodeListOf<HTMLSpanElement>` to `HTMLElement[]`
 
 **Files changed:** `content/subtitle-dom.ts`, `content/ui-events.ts`
+
+### 21. Zone-Based Control Activation & Cursor Auto-Hide (Session 2026-02-10)
+**Problem:** During frequent auto-pause, two things are distracting:
+1. Controls appear on any mouse movement anywhere on the video (even a slight nudge)
+2. Mouse cursor stays visible when video is paused
+
+**Solution (`content/ui-events.ts` + `styles.css`):**
+
+1. **Zone-based controls**: `onMouseActivity(e)` checks `e.clientY` against the player bounds. Only shows controls when mouse is in bottom 80px (bottom controls) or top 60px (top controls). Mouse movement in the middle of the video does nothing to controls.
+
+2. **Cursor auto-hide**: Separate `yle-cursor-active` class on `PlayerUI__UI`, toggled by its own timer (2.5s). Shows on any mouse movement, hides after inactivity. CSS hides cursor when class is absent:
+```css
+div[class*="PlayerUI__UI"]:not(.yle-cursor-active),
+div[class*="PlayerUI__UI"]:not(.yle-cursor-active) * {
+  cursor: none !important;
+}
+```
+
+**Key insights:**
+- Controls and cursor use separate timers — cursor shows on any movement (for subtitle clicking etc.), controls only show in edge zones
+- `touchstart` handler doesn't have MouseEvent coordinates, so it always shows both controls and cursor
+- `getPlayerUI()` helper avoids repeated `querySelector` calls across multiple functions
+
+**Files changed:** `content/ui-events.ts`, `styles.css`
 
 ---
 

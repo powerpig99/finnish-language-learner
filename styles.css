@@ -403,6 +403,14 @@
 }
 
 /* ============================================
+   Hide cursor when inactive on player
+   ============================================ */
+div[class*="PlayerUI__UI"]:not(.yle-cursor-active),
+div[class*="PlayerUI__UI"]:not(.yle-cursor-active) * {
+  cursor: none !important;
+}
+
+/* ============================================
    YLE Areena Clean Pause Mode
    Hide YLE controls on mouse inactivity,
    but keep extension controls always visible

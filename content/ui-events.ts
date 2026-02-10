@@ -9,10 +9,15 @@
 // ==================================
 
 let mouseActivityTimer: ReturnType<typeof setTimeout> | null = null;
+let cursorActivityTimer: ReturnType<typeof setTimeout> | null = null;
 const MOUSE_HIDE_DELAY = 2500; // Hide after 2.5 seconds of inactivity
 
+function getPlayerUI(): HTMLElement | null {
+  return document.querySelector('[class*="PlayerUI__UI"]') as HTMLElement | null;
+}
+
 function showYleControls() {
-  const playerUI = document.querySelector('[class*="PlayerUI__UI"]') as HTMLElement | null;
+  const playerUI = getPlayerUI();
   if (playerUI) {
     playerUI.classList.add('yle-mouse-active');
   }
@@ -20,29 +25,60 @@ function showYleControls() {
 }
 
 function hideYleControls() {
-  const playerUI = document.querySelector('[class*="PlayerUI__UI"]') as HTMLElement | null;
+  const playerUI = getPlayerUI();
   if (playerUI) {
     playerUI.classList.remove('yle-mouse-active');
   }
   document.body.classList.remove('yle-mouse-active');
 }
 
-function onMouseActivity() {
-  showYleControls();
-
-  if (mouseActivityTimer) {
-    clearTimeout(mouseActivityTimer);
+function showCursor() {
+  const playerUI = getPlayerUI();
+  if (playerUI) {
+    playerUI.classList.add('yle-cursor-active');
   }
+}
 
-  mouseActivityTimer = setTimeout(hideYleControls, MOUSE_HIDE_DELAY);
+function hideCursor() {
+  const playerUI = getPlayerUI();
+  if (playerUI) {
+    playerUI.classList.remove('yle-cursor-active');
+  }
+}
+
+function onMouseActivity(e: MouseEvent) {
+  // Always show cursor on any mouse movement
+  showCursor();
+  if (cursorActivityTimer) clearTimeout(cursorActivityTimer);
+  cursorActivityTimer = setTimeout(hideCursor, MOUSE_HIDE_DELAY);
+
+  // Only show controls when mouse is in edge zones of the player
+  const playerUI = getPlayerUI();
+  if (!playerUI) return;
+  const rect = playerUI.getBoundingClientRect();
+  const inBottomZone = e.clientY >= rect.bottom - 80;
+  const inTopZone = e.clientY <= rect.top + 60;
+
+  if (inBottomZone || inTopZone) {
+    showYleControls();
+    if (mouseActivityTimer) clearTimeout(mouseActivityTimer);
+    mouseActivityTimer = setTimeout(hideYleControls, MOUSE_HIDE_DELAY);
+  }
 }
 
 // Track mouse movement
 document.addEventListener('mousemove', onMouseActivity, { passive: true });
-document.addEventListener('touchstart', onMouseActivity, { passive: true });
+document.addEventListener('touchstart', () => {
+  showYleControls();
+  showCursor();
+  if (mouseActivityTimer) clearTimeout(mouseActivityTimer);
+  mouseActivityTimer = setTimeout(hideYleControls, MOUSE_HIDE_DELAY);
+  if (cursorActivityTimer) clearTimeout(cursorActivityTimer);
+  cursorActivityTimer = setTimeout(hideCursor, MOUSE_HIDE_DELAY);
+}, { passive: true });
 
-// Start with controls hidden
-setTimeout(hideYleControls, 1000);
+// Start with controls and cursor hidden
+setTimeout(() => { hideYleControls(); hideCursor(); }, 1000);
 
 /**
  * Focus the video/player to enable keyboard controls
