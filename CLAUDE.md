@@ -29,18 +29,26 @@ A Chrome extension (v5.3.0, Manifest v3) that provides dual subtitles (original 
 
 ```
 yle-language-reactor/
-├── Root files (main entry points)
-│   ├── manifest.json         # Chrome Extension Manifest v3
-│   ├── background.js         # Service worker for translation handling
-│   ├── contentscript.js      # Main content script (YLE-specific)
+├── TypeScript source (compiled to dist/ via npm run build:extension)
+│   ├── background.ts         # Service worker for translation handling
+│   ├── contentscript.ts      # Main content script (YLE-specific)
+│   └── content/              # Content-script modules
+│       ├── settings.ts       # Settings, state, auto-pause, CC detection
+│       ├── subtitle-dom.ts   # Subtitle DOM, mutation observers, getSubtitleTextElements()
+│       ├── ui-events.ts      # Mouse/focus handling, UI event listeners
+│       ├── word-translation.ts # Popup dictionary + tooltip logic
+│       ├── translation-api.ts  # Translation API calls
+│       ├── translation-queue.ts # Batch translation queue
+│       └── runtime-messages.ts  # Popup + runtime message handlers
+│
+├── Plain JS (not compiled)
 │   ├── inject.js             # Script injector for YLE
 │   ├── database.js           # IndexedDB word translation cache
 │   ├── utils.js              # Storage utilities
-│   ├── styles.css            # Unified styles with `dsc-*` prefix
 │   ├── popup.js              # Minimal popup handler
 │   └── types.js              # Type definitions
 │
-├── controls/                 # Control panel modules
+├── controls/                 # Control panel modules (plain JS)
 │   ├── control-panel.js      # Main ControlPanel class
 │   ├── control-actions.js    # Action handlers (skip/repeat/speed)
 │   ├── control-keyboard.js   # Keyboard handler
@@ -53,19 +61,15 @@ yle-language-reactor/
 │   └── screen-recorder.js    # Screen capture recording for DRM
 │
 ├── platforms/yle/            # YLE-specific adapter
-│   ├── yle-adapter.js        # YLE Areena implementation
-│   └── yle-injected.js       # Page-context VTT interception
+│   ├── yle-adapter.ts        # YLE Areena implementation (compiled to dist/)
+│   └── yle-injected.js       # Page-context VTT interception (plain JS)
 │
-├── extension-options-page/   # React-based settings UI
-│   ├── src/                  # React source
-│   ├── dist/                 # Built files
-│   └── package.json          # Build config
-│
-├── lib/
-│   └── lamejs.min.js         # MP3 encoding library
-│
-└── icons/
-    └── icon.png              # Extension icon
+├── Other
+│   ├── manifest.json         # Chrome Extension Manifest v3
+│   ├── styles.css            # Unified styles with `dsc-*` prefix
+│   ├── extension-options-page/ # React-based settings UI
+│   ├── lib/lamejs.min.js     # MP3 encoding library
+│   └── icons/icon.png        # Extension icon
 ```
 
 ## Architecture
@@ -701,9 +705,9 @@ See "YLE Menu Focus Issue" above - likely focusVideo() stealing focus.
 
 | Category | Count |
 |----------|-------|
-| Total Lines of Code | ~5,500 |
+| Total Lines of Code | ~12,700 |
 | Platform | YLE Areena only |
 | Control Modules | 10 |
 | Keyboard Shortcuts | 8 |
-| Translation Providers | 5 |
+| Translation Providers | 6 (Google, DeepL, Claude, Gemini, Grok, Kimi) |
 | Chrome API Permissions | storage, downloads |

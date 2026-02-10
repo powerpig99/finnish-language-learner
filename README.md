@@ -138,6 +138,25 @@ Load the extension in developer mode and test on YLE Areena.
 - No analytics or tracking
 - Only sends data to your chosen translation provider
 
+## Changelog
+
+### v5.3.0 (February 2026)
+- **Fixed:** Dual subtitles not displaying due to YLE Areena player DOM restructure
+- **Improved:** Subtitle rendering now uses a generic text finder, resilient to future YLE DOM changes
+- **Improved:** Subtitle font size syncs with YLE's dynamic player sizing
+
+### v5.2.1 (February 2026)
+- **Fixed:** Hide share overlay and play/pause animation during playback
+
+### v5.2.0 (February 2026)
+- **New:** Clean viewing mode — controls and background shade auto-hide during playback, subtitles drop to bottom for unobstructed viewing
+- **Improved:** Subtitle repositioning when controls show/hide
+
+### v5.1.0 (January 2026)
+- **New:** Auto-pause at end of each subtitle line
+- **New:** CC on/off detection via TextTrack API
+- **Improved:** Unified control panel with all playback features
+
 ## Contributing
 
 Contributions welcome! Please open issues for bugs or feature requests.
