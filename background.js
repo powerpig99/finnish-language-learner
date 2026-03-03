@@ -2,8 +2,18 @@ importScripts('utils.js');
 let currentProvider = { provider: 'google' }; // Default to free Google Translate
 const KIMI_API_URL = 'https://api.kimi.com/coding/v1/messages';
 const KIMI_MODEL = 'kimi-coding/k2p5';
+const GEMINI_MODEL_25_FLASH_LITE = 'gemini-2.5-flash-lite';
+const GEMINI_MODEL_31_FLASH_LITE_PREVIEW = 'gemini-3.1-flash-lite-preview';
+const DEFAULT_GEMINI_MODEL = GEMINI_MODEL_25_FLASH_LITE;
+const SUPPORTED_GEMINI_MODELS = new Set([
+    GEMINI_MODEL_25_FLASH_LITE,
+    GEMINI_MODEL_31_FLASH_LITE_PREVIEW
+]);
 // Load provider config on startup
 loadProviderConfig();
+function normalizeGeminiModel(model) {
+    return SUPPORTED_GEMINI_MODELS.has(model) ? model : DEFAULT_GEMINI_MODEL;
+}
 async function loadProviderConfig() {
     try {
         const result = await chrome.storage.sync.get([
@@ -12,6 +22,7 @@ async function loadProviderConfig() {
             'deeplApiKey',
             'claudeApiKey',
             'geminiApiKey',
+            'geminiModel',
             'grokApiKey',
             'kimiApiKey'
         ]);
@@ -33,6 +44,7 @@ async function loadProviderConfig() {
             };
             currentProvider.apiKey = apiKeyMap[result.translationProvider] || '';
         }
+        currentProvider.geminiModel = normalizeGeminiModel(result.geminiModel);
     }
     catch (error) {
         console.error('YleDualSubExtension: Error loading provider config:', error);
@@ -41,7 +53,7 @@ async function loadProviderConfig() {
 // Listen for storage changes
 chrome.storage.onChanged.addListener((changes, namespace) => {
     if (namespace === 'sync') {
-        const providerKeys = ['translationProvider', 'googleCloudApiKey', 'deeplApiKey', 'claudeApiKey', 'geminiApiKey', 'grokApiKey', 'kimiApiKey'];
+        const providerKeys = ['translationProvider', 'googleCloudApiKey', 'deeplApiKey', 'claudeApiKey', 'geminiApiKey', 'geminiModel', 'grokApiKey', 'kimiApiKey'];
         if (providerKeys.some(key => changes[key])) {
             loadProviderConfig();
         }
@@ -368,7 +380,8 @@ async function requestAiProviderText(provider, prompt, maxTokens) {
             return [true, data?.content?.[0]?.text || ''];
         }
         if (provider === 'gemini') {
-            response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`, {
+            const geminiModel = normalizeGeminiModel(currentProvider.geminiModel);
+            response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${apiKey}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({

@@ -1,6 +1,7 @@
 const DEFAULT_TARGET_LANGUAGE = 'EN-US';
 const DEFAULT_FONT_SIZE = 'medium';
 const DEFAULT_PROVIDER = 'google';
+const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash-lite';
 
 const PROVIDERS = [
   { id: 'google', name: 'Google Translate', description: 'Free, no API key needed' },
@@ -10,6 +11,19 @@ const PROVIDERS = [
   { id: 'gemini', name: 'Gemini (Google AI)', description: "Google's AI model", link: 'https://aistudio.google.com/apikey' },
   { id: 'grok', name: 'Grok (xAI)', description: "xAI's model", link: 'https://console.x.ai' },
   { id: 'kimi', name: 'Kimi', description: 'Kimi 2.5 for Kimi Coding', link: 'https://platform.moonshot.ai' },
+];
+
+const GEMINI_MODELS = [
+  {
+    id: 'gemini-2.5-flash-lite',
+    name: 'Gemini 2.5 Flash-Lite',
+    description: 'Default. Best cost efficiency for this extension.',
+  },
+  {
+    id: 'gemini-3.1-flash-lite-preview',
+    name: 'Gemini 3.1 Flash-Lite Preview',
+    description: 'Canary. Usually faster/higher quality, higher token price.',
+  },
 ];
 
 const FONT_SIZES = [
@@ -65,6 +79,7 @@ const STORAGE_KEYS = [
   'deeplApiKey',
   'claudeApiKey',
   'geminiApiKey',
+  'geminiModel',
   'grokApiKey',
   'kimiApiKey',
   'targetLanguage',
@@ -87,6 +102,7 @@ const state = {
     grok: '',
     kimi: '',
   },
+  geminiModel: DEFAULT_GEMINI_MODEL,
   targetLanguage: DEFAULT_TARGET_LANGUAGE,
   subtitleFontSize: DEFAULT_FONT_SIZE,
   cacheCounts: {
@@ -100,6 +116,9 @@ const dom = {
   apiKeySection: null,
   apiKeyInput: null,
   apiKeyLink: null,
+  geminiModelSection: null,
+  geminiModelSelect: null,
+  geminiModelDescription: null,
   languageSelect: null,
   sizeSlider: null,
   sliderValue: null,
@@ -113,6 +132,14 @@ function getProviderById(providerId) {
   return PROVIDERS.find((provider) => provider.id === providerId) || null;
 }
 
+function isValidGeminiModel(modelId) {
+  return GEMINI_MODELS.some((model) => model.id === modelId);
+}
+
+function getGeminiModelById(modelId) {
+  return GEMINI_MODELS.find((model) => model.id === modelId) || null;
+}
+
 function updateProviderSelection() {
   const radios = dom.providerList.querySelectorAll('input[type="radio"][name="provider"]');
   for (const radio of radios) {
@@ -120,11 +147,26 @@ function updateProviderSelection() {
   }
 }
 
+function updateGeminiModelSection() {
+  const isGeminiSelected = state.translationProvider === 'gemini';
+  dom.geminiModelSection.classList.toggle('hidden', !isGeminiSelected);
+  if (!isGeminiSelected) {
+    return;
+  }
+
+  const safeModel = isValidGeminiModel(state.geminiModel) ? state.geminiModel : DEFAULT_GEMINI_MODEL;
+  state.geminiModel = safeModel;
+  dom.geminiModelSelect.value = safeModel;
+  const model = getGeminiModelById(safeModel);
+  dom.geminiModelDescription.textContent = model ? model.description : '';
+}
+
 function updateApiKeySection() {
   const provider = getProviderById(state.translationProvider);
   const needsApiKey = state.translationProvider !== 'google';
 
   dom.apiKeySection.classList.toggle('hidden', !needsApiKey);
+  updateGeminiModelSection();
   if (!needsApiKey || !provider) {
     return;
   }
@@ -189,6 +231,20 @@ function buildLanguageSelect() {
 
   dom.languageSelect.textContent = '';
   dom.languageSelect.appendChild(fragment);
+}
+
+function buildGeminiModelSelect() {
+  const fragment = document.createDocumentFragment();
+
+  for (const model of GEMINI_MODELS) {
+    const option = document.createElement('option');
+    option.value = model.id;
+    option.textContent = model.name;
+    fragment.appendChild(option);
+  }
+
+  dom.geminiModelSelect.textContent = '';
+  dom.geminiModelSelect.appendChild(fragment);
 }
 
 async function refreshCacheCounts() {
@@ -275,6 +331,26 @@ function attachEventListeners() {
     await saveApiKey(state.translationProvider, dom.apiKeyInput.value);
   });
 
+  dom.geminiModelSelect.addEventListener('change', (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLSelectElement)) {
+      return;
+    }
+
+    const selectedModel = target.value;
+    if (!isValidGeminiModel(selectedModel)) {
+      return;
+    }
+
+    state.geminiModel = selectedModel;
+    const model = getGeminiModelById(selectedModel);
+    dom.geminiModelDescription.textContent = model ? model.description : '';
+
+    chrome.storage.sync
+      .set({ geminiModel: selectedModel })
+      .catch((error) => console.error('Failed to save Gemini model:', error));
+  });
+
   dom.languageSelect.addEventListener('change', (event) => {
     const target = event.target;
     if (!(target instanceof HTMLSelectElement)) {
@@ -335,6 +411,10 @@ async function loadSettings() {
       kimi: typeof result.kimiApiKey === 'string' ? result.kimiApiKey : '',
     };
 
+    if (typeof result.geminiModel === 'string' && isValidGeminiModel(result.geminiModel)) {
+      state.geminiModel = result.geminiModel;
+    }
+
     if (
       typeof result.targetLanguage === 'string' &&
       result.targetLanguage.length > 0 &&
@@ -361,6 +441,9 @@ function cacheDomReferences() {
   dom.apiKeySection = document.getElementById('api-key-section');
   dom.apiKeyInput = document.getElementById('api-key-input');
   dom.apiKeyLink = document.getElementById('api-key-link');
+  dom.geminiModelSection = document.getElementById('gemini-model-section');
+  dom.geminiModelSelect = document.getElementById('gemini-model-select');
+  dom.geminiModelDescription = document.getElementById('gemini-model-description');
   dom.languageSelect = document.getElementById('language-select');
   dom.sizeSlider = document.getElementById('size-slider');
   dom.sliderValue = document.getElementById('slider-value');
@@ -379,6 +462,7 @@ function cacheDomReferences() {
 async function initializeOptionsPage() {
   cacheDomReferences();
   buildProviderList();
+  buildGeminiModelSelect();
   buildLanguageSelect();
   attachEventListeners();
   await loadSettings();

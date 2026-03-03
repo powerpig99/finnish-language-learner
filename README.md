@@ -82,7 +82,7 @@ You can choose your translation engine in Settings. The default is free Google T
 | Google Cloud (v2) | Yes | Paid Google Cloud Translation API. Usage charges apply. | Character-based billing. Using scenarios below: Light `0.24*R`, Regular `0.72*R`, Heavy `1.44*R` where `R = price per 1M chars`. |
 | DeepL | Yes | Uses DeepL API key (free or paid plan depending on your account). | If on paid per-character pricing: Light `0.24*D`, Regular `0.72*D`, Heavy `1.44*D` where `D = price per 1M chars` (or equivalent plan cost). |
 | Claude | Yes | Uses Anthropic API key for contextual translation. | Token-based. Approximate with: `monthly_cost ~= (billable_tokens/1M) * C`, where `C = your Claude rate per 1M tokens`. |
-| Gemini | Yes | Uses Google AI Studio API key for contextual translation. | Token/request-based by model/plan. Approximate with: `monthly_cost ~= (billable_tokens/1M) * G`, where `G = your Gemini rate per 1M tokens`. |
+| Gemini | Yes | Uses Google AI Studio API key for contextual translation. Settings include model selection (`gemini-2.5-flash-lite` default, `gemini-3.1-flash-lite-preview` canary). | Token/request-based by model/plan. Approximate with: `monthly_cost ~= (billable_tokens/1M) * G`, where `G = your Gemini rate per 1M tokens`. |
 | Grok | Yes | Uses xAI API key for contextual translation. | Token-based. Approximate with: `monthly_cost ~= (billable_tokens/1M) * X`, where `X = your Grok rate per 1M tokens`. |
 | Kimi | Yes | Uses Moonshot API key for contextual translation. | Token-based. Approximate with: `monthly_cost ~= (billable_tokens/1M) * K`, where `K = your Kimi rate per 1M tokens`. |
 

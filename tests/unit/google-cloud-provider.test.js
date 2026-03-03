@@ -273,4 +273,87 @@ describe('Google Cloud provider integration', () => {
         const isValid = await context.__checkHasValidProvider();
         assert.equal(isValid, false);
     });
+
+    test('Gemini defaults to 2.5 flash-lite when no geminiModel is stored', async () => {
+        const { context } = buildBackgroundHarness({
+            translationProvider: 'gemini',
+            geminiApiKey: 'gemini-key',
+        });
+
+        const requestedUrls = [];
+        context.fetch = async (url) => {
+            requestedUrls.push(String(url));
+            return jsonResponse({
+                candidates: [
+                    {
+                        content: {
+                            parts: [{ text: 'hello world' }],
+                        },
+                    },
+                ],
+            });
+        };
+
+        await context.loadProviderConfig();
+        const result = await context.translateWithGemini(['hei maailma'], 'EN-US');
+
+        assert.equal(result[0], true);
+        assert.match(requestedUrls[0], /models\/gemini-2\.5-flash-lite:generateContent/);
+    });
+
+    test('Gemini uses configured 3.1 flash-lite preview model when selected', async () => {
+        const { context } = buildBackgroundHarness({
+            translationProvider: 'gemini',
+            geminiApiKey: 'gemini-key',
+            geminiModel: 'gemini-3.1-flash-lite-preview',
+        });
+
+        const requestedUrls = [];
+        context.fetch = async (url) => {
+            requestedUrls.push(String(url));
+            return jsonResponse({
+                candidates: [
+                    {
+                        content: {
+                            parts: [{ text: 'hello world' }],
+                        },
+                    },
+                ],
+            });
+        };
+
+        await context.loadProviderConfig();
+        const result = await context.translateWithGemini(['hei maailma'], 'EN-US');
+
+        assert.equal(result[0], true);
+        assert.match(requestedUrls[0], /models\/gemini-3\.1-flash-lite-preview:generateContent/);
+    });
+
+    test('Gemini falls back to 2.5 flash-lite when stored geminiModel is invalid', async () => {
+        const { context } = buildBackgroundHarness({
+            translationProvider: 'gemini',
+            geminiApiKey: 'gemini-key',
+            geminiModel: 'gemini-999',
+        });
+
+        const requestedUrls = [];
+        context.fetch = async (url) => {
+            requestedUrls.push(String(url));
+            return jsonResponse({
+                candidates: [
+                    {
+                        content: {
+                            parts: [{ text: 'hello world' }],
+                        },
+                    },
+                ],
+            });
+        };
+
+        await context.loadProviderConfig();
+        const result = await context.translateWithGemini(['hei maailma'], 'EN-US');
+
+        assert.equal(result[0], true);
+        assert.match(requestedUrls[0], /models\/gemini-2\.5-flash-lite:generateContent/);
+    });
 });
