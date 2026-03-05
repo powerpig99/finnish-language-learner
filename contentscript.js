@@ -252,14 +252,22 @@ function getVideoTitle() {
  * @returns {Promise<void>}
  */
 async function loadMovieCacheAndUpdateMetadata(movieName) {
-    const db = await openDatabase();
     // Use provided movie name or try to get from YLE page.
     const nextMovieName = movieName || getVideoTitle();
     if (!nextMovieName) {
         return;
     }
+    const expectedGeneration = typeof getCurrentTranslationSessionGeneration === 'function'
+        ? getCurrentTranslationSessionGeneration()
+        : null;
     currentMovieName = nextMovieName;
-    const subtitleRecords = await loadSubtitlesByMovieName(db, currentMovieName, targetLanguage);
+    const db = await openDatabase();
+    const subtitleRecords = await loadSubtitlesByMovieName(db, nextMovieName, targetLanguage);
+    if (typeof expectedGeneration === 'number' &&
+        typeof isCurrentTranslationSessionGeneration === 'function' &&
+        !isCurrentTranslationSessionGeneration(expectedGeneration)) {
+        return;
+    }
     for (const subtitleRecord of subtitleRecords) {
         const originalText = String(subtitleRecord.originalText || '').trim().replace(/\n/g, ' ');
         if (!originalText) {
@@ -280,11 +288,12 @@ async function loadMovieCacheAndUpdateMetadata(movieName) {
         subtitleState.set(key, {
             status: 'success',
             text: resolvedText,
+            generation: expectedGeneration,
             updatedAt: Date.now(),
         });
     }
     const lastAccessedDays = Math.floor(Date.now() / (1000 * 60 * 60 * 24));
-    await upsertMovieMetadata(db, currentMovieName, lastAccessedDays);
+    await upsertMovieMetadata(db, nextMovieName, lastAccessedDays);
 }
 // Listen for batch translation events from yle-injected.js
 document.addEventListener("sendBatchTranslationEvent", (e) => {

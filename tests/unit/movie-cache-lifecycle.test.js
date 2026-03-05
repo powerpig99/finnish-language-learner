@@ -50,16 +50,23 @@ function buildHarness({
     fullSubtitles = [],
     resolvedMovieTitle = null,
     providedMovieName = undefined,
+    loadSubtitlesByMovieNameImpl = async () => [],
 } = {}) {
     const setSubtitlesCalls = [];
+    const upsertMovieMetadataCalls = [];
     const subtitleState = new Map();
     const now = Date.now();
+    let translationGeneration = 0;
     const context = {
         Date: { now: () => now },
         openDatabase: async () => ({ tag: 'db' }),
-        loadSubtitlesByMovieName: async () => [],
-        upsertMovieMetadata: async () => {},
+        loadSubtitlesByMovieName: loadSubtitlesByMovieNameImpl,
+        upsertMovieMetadata: async (...args) => {
+            upsertMovieMetadataCalls.push(args);
+        },
         getVideoTitle: () => resolvedMovieTitle,
+        getCurrentTranslationSessionGeneration: () => translationGeneration,
+        isCurrentTranslationSessionGeneration: (generation) => generation === translationGeneration,
         ControlIntegration: {
             setSubtitles: (subtitles) => {
                 setSubtitlesCalls.push(Array.isArray(subtitles) ? subtitles.map((sub) => ({ ...sub })) : subtitles);
@@ -86,6 +93,10 @@ globalThis.__api = { loadMovieCacheAndUpdateMetadata };
         context,
         setSubtitlesCalls,
         subtitleState,
+        upsertMovieMetadataCalls,
+        setGeneration: (nextGeneration) => {
+            translationGeneration = nextGeneration;
+        },
         invoke: () => context.__api.loadMovieCacheAndUpdateMetadata(providedMovieName),
     };
 }
@@ -131,5 +142,35 @@ describe('loadMovieCacheAndUpdateMetadata lifecycle', () => {
         assert.equal(harness.context.fullSubtitles.length, 1);
         assert.equal(harness.context.currentMovieName, 'movie-a');
         assert.equal(harness.setSubtitlesCalls.length, 0);
+    });
+
+    test('ignores stale cache population after navigation generation changes', async () => {
+        let resolveSubtitles = null;
+        const harness = buildHarness({
+            currentMovieName: 'movie-a',
+            providedMovieName: 'movie-a',
+            loadSubtitlesByMovieNameImpl: async () => await new Promise((resolve) => {
+                resolveSubtitles = resolve;
+            }),
+        });
+
+        const loadPromise = harness.invoke();
+        for (let attempt = 0; attempt < 5 && typeof resolveSubtitles !== 'function'; attempt++) {
+            await Promise.resolve();
+        }
+
+        harness.setGeneration(1);
+        harness.context.currentMovieName = 'movie-b';
+        assert.equal(typeof resolveSubtitles, 'function');
+        resolveSubtitles([{
+            originalText: 'vanha rivi',
+            translatedText: 'old line',
+        }]);
+
+        await loadPromise;
+
+        assert.equal(harness.context.currentMovieName, 'movie-b');
+        assert.equal(harness.subtitleState.size, 0);
+        assert.equal(harness.upsertMovieMetadataCalls.length, 0);
     });
 });
