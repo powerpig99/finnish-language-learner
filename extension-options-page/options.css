@@ -161,6 +161,38 @@ body {
   font-size: 13px;
 }
 
+.grok-model-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.grok-model-label {
+  font-size: 13px;
+  color: #9ca3af;
+}
+
+.grok-model-input {
+  background: #1a1a1a;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: #e5e5e5;
+  font-size: 14px;
+  width: 100%;
+}
+
+.grok-model-input:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
+
+.grok-model-description {
+  color: #6b7280;
+  font-size: 13px;
+}
+
 .language-dropdown {
   background: #1a1a1a;
   border: 1px solid rgba(255, 255, 255, 0.15);

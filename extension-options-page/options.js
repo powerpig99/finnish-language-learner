@@ -2,6 +2,7 @@ const DEFAULT_TARGET_LANGUAGE = 'EN-US';
 const DEFAULT_FONT_SIZE = 'medium';
 const DEFAULT_PROVIDER = 'google';
 const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash-lite';
+const DEFAULT_GROK_MODEL = 'grok-4-1-fast-non-reasoning-latest';
 
 const PROVIDERS = [
   { id: 'google', name: 'Google Translate', description: 'Free, no API key needed' },
@@ -80,6 +81,7 @@ const STORAGE_KEYS = [
   'claudeApiKey',
   'geminiApiKey',
   'geminiModel',
+  'grokModel',
   'grokApiKey',
   'kimiApiKey',
   'targetLanguage',
@@ -103,6 +105,7 @@ const state = {
     kimi: '',
   },
   geminiModel: DEFAULT_GEMINI_MODEL,
+  grokModel: DEFAULT_GROK_MODEL,
   targetLanguage: DEFAULT_TARGET_LANGUAGE,
   subtitleFontSize: DEFAULT_FONT_SIZE,
   cacheCounts: {
@@ -119,6 +122,8 @@ const dom = {
   geminiModelSection: null,
   geminiModelSelect: null,
   geminiModelDescription: null,
+  grokModelSection: null,
+  grokModelInput: null,
   languageSelect: null,
   sizeSlider: null,
   sliderValue: null,
@@ -161,12 +166,23 @@ function updateGeminiModelSection() {
   dom.geminiModelDescription.textContent = model ? model.description : '';
 }
 
+function updateGrokModelSection() {
+  const isGrokSelected = state.translationProvider === 'grok';
+  dom.grokModelSection.classList.toggle('hidden', !isGrokSelected);
+  if (!isGrokSelected) {
+    return;
+  }
+
+  dom.grokModelInput.value = state.grokModel;
+}
+
 function updateApiKeySection() {
   const provider = getProviderById(state.translationProvider);
   const needsApiKey = state.translationProvider !== 'google';
 
   dom.apiKeySection.classList.toggle('hidden', !needsApiKey);
   updateGeminiModelSection();
+  updateGrokModelSection();
   if (!needsApiKey || !provider) {
     return;
   }
@@ -351,6 +367,17 @@ function attachEventListeners() {
       .catch((error) => console.error('Failed to save Gemini model:', error));
   });
 
+  dom.grokModelInput.addEventListener('blur', () => {
+    const modelInputValue = dom.grokModelInput.value;
+    const normalizedModel = modelInputValue.trim() || DEFAULT_GROK_MODEL;
+    state.grokModel = normalizedModel;
+    dom.grokModelInput.value = normalizedModel;
+
+    chrome.storage.sync
+      .set({ grokModel: normalizedModel })
+      .catch((error) => console.error('Failed to save Grok model:', error));
+  });
+
   dom.languageSelect.addEventListener('change', (event) => {
     const target = event.target;
     if (!(target instanceof HTMLSelectElement)) {
@@ -415,6 +442,10 @@ async function loadSettings() {
       state.geminiModel = result.geminiModel;
     }
 
+    if (typeof result.grokModel === 'string' && result.grokModel.trim().length > 0) {
+      state.grokModel = result.grokModel.trim();
+    }
+
     if (
       typeof result.targetLanguage === 'string' &&
       result.targetLanguage.length > 0 &&
@@ -444,6 +475,8 @@ function cacheDomReferences() {
   dom.geminiModelSection = document.getElementById('gemini-model-section');
   dom.geminiModelSelect = document.getElementById('gemini-model-select');
   dom.geminiModelDescription = document.getElementById('gemini-model-description');
+  dom.grokModelSection = document.getElementById('grok-model-section');
+  dom.grokModelInput = document.getElementById('grok-model-input');
   dom.languageSelect = document.getElementById('language-select');
   dom.sizeSlider = document.getElementById('size-slider');
   dom.sliderValue = document.getElementById('slider-value');

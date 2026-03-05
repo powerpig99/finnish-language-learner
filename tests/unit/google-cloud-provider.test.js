@@ -367,6 +367,92 @@ describe('Google Cloud provider integration', () => {
         assert.match(requestedUrls[0], /models\/gemini-2\.5-flash-lite:generateContent/);
     });
 
+    test('Grok defaults to built-in model when no grokModel is stored', async () => {
+        const { context } = buildBackgroundHarness({
+            translationProvider: 'grok',
+            grokApiKey: 'grok-key',
+        });
+
+        const requestedModels = [];
+        context.fetch = async (_url, options = {}) => {
+            const requestBody = JSON.parse(String(options.body || '{}'));
+            requestedModels.push(requestBody.model);
+            return jsonResponse({
+                choices: [
+                    {
+                        message: {
+                            content: 'hello world',
+                        },
+                    },
+                ],
+            });
+        };
+
+        await context.loadProviderConfig();
+        const result = await context.translateWithGrok(['hei maailma'], 'EN-US');
+
+        assert.equal(result[0], true);
+        assert.equal(requestedModels[0], 'grok-4-1-fast-non-reasoning-latest');
+    });
+
+    test('Grok uses configured grokModel when provided', async () => {
+        const { context } = buildBackgroundHarness({
+            translationProvider: 'grok',
+            grokApiKey: 'grok-key',
+            grokModel: 'grok-3-mini-fast-beta',
+        });
+
+        const requestedModels = [];
+        context.fetch = async (_url, options = {}) => {
+            const requestBody = JSON.parse(String(options.body || '{}'));
+            requestedModels.push(requestBody.model);
+            return jsonResponse({
+                choices: [
+                    {
+                        message: {
+                            content: 'hello world',
+                        },
+                    },
+                ],
+            });
+        };
+
+        await context.loadProviderConfig();
+        const result = await context.translateWithGrok(['hei maailma'], 'EN-US');
+
+        assert.equal(result[0], true);
+        assert.equal(requestedModels[0], 'grok-3-mini-fast-beta');
+    });
+
+    test('Grok falls back to built-in model when stored grokModel is blank', async () => {
+        const { context } = buildBackgroundHarness({
+            translationProvider: 'grok',
+            grokApiKey: 'grok-key',
+            grokModel: '   ',
+        });
+
+        const requestedModels = [];
+        context.fetch = async (_url, options = {}) => {
+            const requestBody = JSON.parse(String(options.body || '{}'));
+            requestedModels.push(requestBody.model);
+            return jsonResponse({
+                choices: [
+                    {
+                        message: {
+                            content: 'hello world',
+                        },
+                    },
+                ],
+            });
+        };
+
+        await context.loadProviderConfig();
+        const result = await context.translateWithGrok(['hei maailma'], 'EN-US');
+
+        assert.equal(result[0], true);
+        assert.equal(requestedModels[0], 'grok-4-1-fast-non-reasoning-latest');
+    });
+
     test('Grok surfaces 403 as access denied with provider detail', async () => {
         const { context } = buildBackgroundHarness({
             translationProvider: 'grok',

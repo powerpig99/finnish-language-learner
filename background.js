@@ -5,6 +5,7 @@ const KIMI_MODEL = 'kimi-coding/k2p5';
 const GEMINI_MODEL_25_FLASH_LITE = 'gemini-2.5-flash-lite';
 const GEMINI_MODEL_31_FLASH_LITE_PREVIEW = 'gemini-3.1-flash-lite-preview';
 const DEFAULT_GEMINI_MODEL = GEMINI_MODEL_25_FLASH_LITE;
+const DEFAULT_GROK_MODEL = 'grok-4-1-fast-non-reasoning-latest';
 const SUPPORTED_GEMINI_MODELS = new Set([
     GEMINI_MODEL_25_FLASH_LITE,
     GEMINI_MODEL_31_FLASH_LITE_PREVIEW
@@ -13,6 +14,13 @@ const SUPPORTED_GEMINI_MODELS = new Set([
 loadProviderConfig();
 function normalizeGeminiModel(model) {
     return SUPPORTED_GEMINI_MODELS.has(model) ? model : DEFAULT_GEMINI_MODEL;
+}
+function normalizeGrokModel(model) {
+    if (typeof model !== 'string') {
+        return DEFAULT_GROK_MODEL;
+    }
+    const normalizedModel = model.trim();
+    return normalizedModel || DEFAULT_GROK_MODEL;
 }
 async function loadProviderConfig() {
     try {
@@ -23,6 +31,7 @@ async function loadProviderConfig() {
             'claudeApiKey',
             'geminiApiKey',
             'geminiModel',
+            'grokModel',
             'grokApiKey',
             'kimiApiKey'
         ]);
@@ -45,6 +54,7 @@ async function loadProviderConfig() {
             currentProvider.apiKey = apiKeyMap[result.translationProvider] || '';
         }
         currentProvider.geminiModel = normalizeGeminiModel(result.geminiModel);
+        currentProvider.grokModel = normalizeGrokModel(result.grokModel);
     }
     catch (error) {
         console.error('YleDualSubExtension: Error loading provider config:', error);
@@ -53,7 +63,7 @@ async function loadProviderConfig() {
 // Listen for storage changes
 chrome.storage.onChanged.addListener((changes, namespace) => {
     if (namespace === 'sync') {
-        const providerKeys = ['translationProvider', 'googleCloudApiKey', 'deeplApiKey', 'claudeApiKey', 'geminiApiKey', 'geminiModel', 'grokApiKey', 'kimiApiKey'];
+        const providerKeys = ['translationProvider', 'googleCloudApiKey', 'deeplApiKey', 'claudeApiKey', 'geminiApiKey', 'geminiModel', 'grokModel', 'grokApiKey', 'kimiApiKey'];
         if (providerKeys.some(key => changes[key])) {
             loadProviderConfig();
         }
@@ -443,6 +453,7 @@ async function requestAiProviderText(provider, prompt, maxTokens) {
             return [true, data?.candidates?.[0]?.content?.parts?.[0]?.text || ''];
         }
         if (provider === 'grok') {
+            const grokModel = normalizeGrokModel(currentProvider.grokModel);
             response = await fetch('https://api.x.ai/v1/chat/completions', {
                 method: 'POST',
                 headers: {
@@ -450,7 +461,7 @@ async function requestAiProviderText(provider, prompt, maxTokens) {
                     'Authorization': `Bearer ${apiKey}`
                 },
                 body: JSON.stringify({
-                    model: 'grok-4-1-fast-non-reasoning-latest',
+                    model: grokModel,
                     messages: [{ role: 'user', content: prompt }],
                     temperature: 0.1,
                     max_tokens: maxTokens
