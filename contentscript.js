@@ -253,18 +253,12 @@ function getVideoTitle() {
  */
 async function loadMovieCacheAndUpdateMetadata(movieName) {
     const db = await openDatabase();
-    // Clear accumulated subtitles when starting a new video
-    fullSubtitles.length = 0;
-    // Use provided movie name or try to get from YLE page
-    if (movieName) {
-        currentMovieName = movieName;
-    }
-    else {
-        currentMovieName = getVideoTitle();
-    }
-    if (!currentMovieName) {
+    // Use provided movie name or try to get from YLE page.
+    const nextMovieName = movieName || getVideoTitle();
+    if (!nextMovieName) {
         return;
     }
+    currentMovieName = nextMovieName;
     const subtitleRecords = await loadSubtitlesByMovieName(db, currentMovieName, targetLanguage);
     for (const subtitleRecord of subtitleRecords) {
         const originalText = String(subtitleRecord.originalText || '').trim().replace(/\n/g, ' ');

@@ -423,7 +423,7 @@ const ControlIntegration = {
    * @private
    */
   _handlePrevSubtitle() {
-    ControlActions.skipToPreviousSubtitle();
+    ControlActions.skipToPreviousSubtitle(this._subtitles);
   },
 
   /**
@@ -431,7 +431,7 @@ const ControlIntegration = {
    * @private
    */
   _handleNextSubtitle() {
-    ControlActions.skipToNextSubtitle();
+    ControlActions.skipToNextSubtitle(this._subtitles);
   },
 
   /**

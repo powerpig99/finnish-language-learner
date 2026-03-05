@@ -15,15 +15,25 @@ const ControlActions = {
 
   /**
    * Build sorted, de-duplicated subtitle start times for navigation.
-   * Uses active text-track cues only (single source of truth).
+   * Prefers prefetched subtitle timing (from intercepted VTT) for deterministic
+   * long-gap navigation, with active text-track cues as fallback.
    * @param {HTMLVideoElement} video
+   * @param {Array<{startTime: number}>} subtitles
    * @returns {number[]}
    */
-  getNavigationStartTimes(video) {
+  getNavigationStartTimes(video, subtitles = []) {
     const EPSILON = 0.001;
     const cueTimes = [];
+    const hasPrefetchedSubtitles = Array.isArray(subtitles) && subtitles.length > 0;
 
-    if (video && video.textTracks && video.textTracks.length > 0) {
+    if (hasPrefetchedSubtitles) {
+      for (const subtitle of subtitles) {
+        const startTime = subtitle?.startTime;
+        if (typeof startTime === 'number' && Number.isFinite(startTime)) {
+          cueTimes.push(startTime);
+        }
+      }
+    } else if (video && video.textTracks && video.textTracks.length > 0) {
       for (const track of Array.from(video.textTracks)) {
         if (!track) continue;
         const cues = track.cues;
@@ -73,13 +83,14 @@ const ControlActions = {
 
   /**
    * Skip to the previous subtitle
+   * @param {Array<{startTime: number}>} subtitles
    */
-  skipToPreviousSubtitle() {
+  skipToPreviousSubtitle(subtitles = []) {
     const video = this.getVideoElement();
     if (!video) return;
 
     const currentTime = video.currentTime;
-    const startTimes = this.getNavigationStartTimes(video);
+    const startTimes = this.getNavigationStartTimes(video, subtitles);
     const EPSILON = 0.001;
 
     if (startTimes.length === 0) return;
@@ -112,13 +123,14 @@ const ControlActions = {
 
   /**
    * Skip to the next subtitle
+   * @param {Array<{startTime: number}>} subtitles
    */
-  skipToNextSubtitle() {
+  skipToNextSubtitle(subtitles = []) {
     const video = this.getVideoElement();
     if (!video) return;
 
     const currentTime = video.currentTime;
-    const startTimes = this.getNavigationStartTimes(video);
+    const startTimes = this.getNavigationStartTimes(video, subtitles);
     const EPSILON = 0.001;
 
     if (startTimes.length === 0) return;

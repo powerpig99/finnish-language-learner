@@ -188,6 +188,9 @@ function setupVideoSpeedControl() {
         });
         // "New video" on source swap: same element, new src during SPA navigation.
         video.addEventListener('loadstart', () => {
+            if (typeof resetNavigationSubtitleTimeline === 'function') {
+                resetNavigationSubtitleTimeline();
+            }
             if (typeof loadMovieCacheAndUpdateMetadata !== 'function') {
                 return;
             }

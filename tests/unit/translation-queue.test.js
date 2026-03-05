@@ -25,6 +25,8 @@ function normalizeLanguageCode(langCode) {
 
 function buildTranslationQueueHarness() {
     const dispatchedEvents = [];
+    const setSubtitlesCalls = [];
+    const indicatorStats = { showCount: 0, hideCount: 0, updateCount: 0 };
     const context = {
         console: {
             ...console,
@@ -46,11 +48,21 @@ function buildTranslationQueueHarness() {
         globalDatabaseInstance: null,
         saveSubtitlesBatch: async () => 0,
         fullSubtitles: [],
-        ControlIntegration: { setSubtitles: () => {} },
+        ControlIntegration: {
+            setSubtitles: (subtitles) => {
+                setSubtitlesCalls.push(subtitles.map((sub) => ({ ...sub })));
+            }
+        },
         getCurrentTranslationProvider: () => 'google',
-        showBatchTranslationIndicator: () => {},
-        updateBatchTranslationIndicator: () => {},
-        hideBatchTranslationIndicator: () => {},
+        showBatchTranslationIndicator: () => {
+            indicatorStats.showCount += 1;
+        },
+        updateBatchTranslationIndicator: () => {
+            indicatorStats.updateCount += 1;
+        },
+        hideBatchTranslationIndicator: () => {
+            indicatorStats.hideCount += 1;
+        },
         sleep: async () => {},
         document: {
             dispatchEvent: (event) => {
@@ -71,7 +83,7 @@ function buildTranslationQueueHarness() {
     vm.createContext(context);
     vm.runInContext(scriptSource, context, { filename: 'translation-queue.js' });
 
-    return { context, dispatchedEvents };
+    return { context, dispatchedEvents, setSubtitlesCalls, indicatorStats };
 }
 
 describe('translation queue non-translatable subtitle handling', () => {
@@ -270,5 +282,153 @@ describe('translation queue non-translatable subtitle handling', () => {
         context.clearSubtitleTranslationState();
         const movedAfterReset = context.enqueueTranslation('Hei maailma');
         assert.equal(movedAfterReset, true);
+    });
+
+    test('handleBatchTranslation updates navigation timing during in-flight batch and processes queued subtitles', async () => {
+        const { context, setSubtitlesCalls } = buildTranslationQueueHarness();
+        let fetchCallCount = 0;
+        let resolveFirstFetch = null;
+
+        context.fetchBatchTranslation = async (texts) => {
+            fetchCallCount += 1;
+            if (fetchCallCount === 1) {
+                return await new Promise((resolve) => {
+                    resolveFirstFetch = () => resolve([true, texts.map((text) => `translated:${text}`)]);
+                });
+            }
+            return [true, texts.map((text) => `translated:${text}`)];
+        };
+
+        const firstBatchPromise = context.handleBatchTranslation([
+            { text: 'ensimmäinen', startTime: 1, endTime: 2 },
+        ]);
+
+        await Promise.resolve();
+
+        await context.handleBatchTranslation([
+            { text: 'kauempana', startTime: 120, endTime: 121 },
+        ]);
+
+        assert.ok(
+            context.fullSubtitles.some((subtitle) => subtitle.startTime === 120),
+            'expected far subtitle timing to be merged immediately for navigation'
+        );
+        assert.ok(
+            setSubtitlesCalls.some((batch) => batch.some((subtitle) => subtitle.startTime === 120)),
+            'expected ControlIntegration.setSubtitles to receive far subtitle timing'
+        );
+
+        assert.equal(typeof resolveFirstFetch, 'function');
+        resolveFirstFetch();
+        await firstBatchPromise;
+
+        for (let attempt = 0; attempt < 20; attempt++) {
+            const entry = context.subtitleState.get(toTranslationKey('kauempana'));
+            if (entry?.status === 'success') {
+                break;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+
+        const queuedEntry = context.subtitleState.get(toTranslationKey('kauempana'));
+        assert.equal(fetchCallCount, 2);
+        assert.equal(queuedEntry?.status, 'success');
+        assert.equal(queuedEntry?.text, 'translated:kauempana');
+    });
+
+    test('queued subtitles are still processed when current in-flight batch has nothing new to translate', async () => {
+        const { context } = buildTranslationQueueHarness();
+        let resolveFirstFetch = null;
+        let fetchCallCount = 0;
+
+        context.fetchBatchTranslation = async (texts) => {
+            fetchCallCount += 1;
+            if (fetchCallCount === 1) {
+                return await new Promise((resolve) => {
+                    resolveFirstFetch = () => resolve([true, texts.map((text) => `translated:${text}`)]);
+                });
+            }
+            return [true, texts.map((text) => `translated:${text}`)];
+        };
+
+        const firstBatchPromise = context.handleBatchTranslation([
+            { text: 'sama rivi', startTime: 1, endTime: 2 },
+        ]);
+
+        await Promise.resolve();
+
+        // Duplicate text while first batch is in-flight -> no new translation work for this batch,
+        // but it should still allow queued follow-up batches to process.
+        await context.handleBatchTranslation([
+            { text: 'sama rivi', startTime: 3, endTime: 4 },
+        ]);
+
+        // New text arrives while still in-flight and must not be dropped.
+        await context.handleBatchTranslation([
+            { text: 'uusi rivi', startTime: 5, endTime: 6 },
+        ]);
+
+        assert.equal(typeof resolveFirstFetch, 'function');
+        resolveFirstFetch();
+        await firstBatchPromise;
+
+        for (let attempt = 0; attempt < 20; attempt++) {
+            const entry = context.subtitleState.get(toTranslationKey('uusi rivi'));
+            if (entry?.status === 'success') {
+                break;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+
+        const queuedEntry = context.subtitleState.get(toTranslationKey('uusi rivi'));
+        assert.equal(fetchCallCount, 2);
+        assert.equal(queuedEntry?.status, 'success');
+        assert.equal(queuedEntry?.text, 'translated:uusi rivi');
+    });
+
+    test('batch translation indicator shows once for repeated batches in same movie session', async () => {
+        const { context, indicatorStats } = buildTranslationQueueHarness();
+        context.fetchBatchTranslation = async (texts) => [true, texts.map((text) => `translated:${text}`)];
+
+        await context.handleBatchTranslation([
+            { text: 'ensimmäinen', startTime: 1, endTime: 2 },
+        ]);
+        await context.handleBatchTranslation([
+            { text: 'toinen', startTime: 3, endTime: 4 },
+        ]);
+
+        assert.equal(indicatorStats.showCount, 1);
+        assert.equal(indicatorStats.hideCount, 1);
+    });
+
+    test('batch translation indicator gate resets after subtitle timeline is reset for new movie', async () => {
+        const { context, indicatorStats } = buildTranslationQueueHarness();
+        context.fetchBatchTranslation = async (texts) => [true, texts.map((text) => `translated:${text}`)];
+
+        await context.handleBatchTranslation([
+            { text: 'ensimmäinen', startTime: 1, endTime: 2 },
+        ]);
+        context.fullSubtitles.length = 0;
+        await context.handleBatchTranslation([
+            { text: 'uusi video', startTime: 1, endTime: 2 },
+        ]);
+
+        assert.equal(indicatorStats.showCount, 2);
+        assert.equal(indicatorStats.hideCount, 2);
+    });
+
+    test('resetNavigationSubtitleTimeline clears prefetched navigation subtitles and syncs empty state', () => {
+        const { context, setSubtitlesCalls } = buildTranslationQueueHarness();
+        context.fullSubtitles.push(
+            { startTime: 1, endTime: 2, text: 'one' },
+            { startTime: 3, endTime: 4, text: 'two' }
+        );
+
+        context.resetNavigationSubtitleTimeline();
+
+        assert.equal(context.fullSubtitles.length, 0);
+        assert.equal(setSubtitlesCalls.length, 1);
+        assert.equal(Array.isArray(setSubtitlesCalls[0]), true);
+        assert.equal(setSubtitlesCalls[0].length, 0);
     });
 });

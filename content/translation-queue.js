@@ -376,15 +376,49 @@ function clearSubtitleTranslationState() {
     subtitleState.clear();
     translationQueue.clear();
     echoBackRetryCounts.clear();
+    pendingBatchSubtitles.length = 0;
+    hasShownBatchTranslationIndicator = false;
     if (typeof clearActiveTranslationSpans === 'function') {
         clearActiveTranslationSpans();
     }
 }
 // Batch translation state
 let isBatchTranslating = false;
+const pendingBatchSubtitles = [];
 let batchTranslationProgress = { current: 0, total: 0 };
+let hasShownBatchTranslationIndicator = false;
 function buildFullSubtitleKey(startTime, endTime, text) {
     return `${startTime.toFixed(3)}|${endTime.toFixed(3)}|${toTranslationKey(text)}`;
+}
+function resetNavigationSubtitleTimeline() {
+    fullSubtitles.length = 0;
+    ControlIntegration.setSubtitles(fullSubtitles);
+}
+function mergeSubtitlesIntoNavigationCache(subtitles) {
+    if (!Array.isArray(subtitles) || subtitles.length === 0) {
+        return;
+    }
+    const existingFullSubtitleKeys = new Set(fullSubtitles.map(sub => buildFullSubtitleKey(sub.startTime, sub.endTime, sub.text)));
+    for (const sub of subtitles) {
+        if (sub.startTime === undefined || sub.endTime === undefined) {
+            continue;
+        }
+        const fullSubtitleKey = buildFullSubtitleKey(sub.startTime, sub.endTime, sub.text);
+        if (!existingFullSubtitleKeys.has(fullSubtitleKey)) {
+            existingFullSubtitleKeys.add(fullSubtitleKey);
+            fullSubtitles.push({ startTime: sub.startTime, endTime: sub.endTime, text: sub.text });
+        }
+    }
+    fullSubtitles.sort((a, b) => a.startTime - b.startTime);
+    // Sync ACCUMULATED subtitles with ControlIntegration for skip/repeat functionality
+    // Note: Call setSubtitles even if panel isn't mounted yet - it just stores the data
+    ControlIntegration.setSubtitles(fullSubtitles);
+}
+function queuePendingBatchSubtitles(subtitles) {
+    if (!Array.isArray(subtitles) || subtitles.length === 0) {
+        return;
+    }
+    pendingBatchSubtitles.push(subtitles);
 }
 /**
  * Handle batch translation of all subtitles with context
@@ -392,109 +426,116 @@ function buildFullSubtitleKey(startTime, endTime, text) {
  * @returns {Promise<void>}
  */
 async function handleBatchTranslation(subtitles) {
+    if (!Array.isArray(subtitles) || subtitles.length === 0) {
+        return;
+    }
+    // New movie/navigation resets fullSubtitles before first batch event.
+    // Reset indicator gate so pre-translation notice appears once per movie.
+    if (!isBatchTranslating && fullSubtitles.length === 0) {
+        hasShownBatchTranslationIndicator = false;
+    }
+    mergeSubtitlesIntoNavigationCache(subtitles);
+    queuePendingBatchSubtitles(subtitles);
     if (isBatchTranslating) {
         return;
     }
     isBatchTranslating = true;
+    let didShowIndicatorThisRun = false;
     try {
-        const translationProvider = getCurrentTranslationProvider();
-        // Pre-populate full subtitles for skip/repeat features.
-        const existingFullSubtitleKeys = new Set(fullSubtitles.map(sub => buildFullSubtitleKey(sub.startTime, sub.endTime, sub.text)));
-        for (const sub of subtitles) {
-            if (sub.startTime === undefined || sub.endTime === undefined) {
+        while (pendingBatchSubtitles.length > 0) {
+            const currentBatch = pendingBatchSubtitles.shift();
+            if (!Array.isArray(currentBatch) || currentBatch.length === 0) {
                 continue;
             }
-            const fullSubtitleKey = buildFullSubtitleKey(sub.startTime, sub.endTime, sub.text);
-            if (!existingFullSubtitleKeys.has(fullSubtitleKey)) {
-                existingFullSubtitleKeys.add(fullSubtitleKey);
-                fullSubtitles.push({ startTime: sub.startTime, endTime: sub.endTime, text: sub.text });
+            const translationProvider = getCurrentTranslationProvider();
+            // enqueueTranslation(..., false) only writes pending state and dedupes.
+            // This batch loop is responsible for resolving each pending entry.
+            const toTranslateSubtitles = currentBatch.filter(sub => enqueueTranslation(sub.text, false));
+            if (toTranslateSubtitles.length === 0) {
+                continue;
             }
-        }
-        fullSubtitles.sort((a, b) => a.startTime - b.startTime);
-        // Sync ACCUMULATED subtitles with ControlIntegration for skip/repeat functionality
-        // Note: Call setSubtitles even if panel isn't mounted yet - it just stores the data
-        ControlIntegration.setSubtitles(fullSubtitles);
-        // enqueueTranslation(..., false) only writes pending state and dedupes.
-        // This batch loop is responsible for resolving each pending entry.
-        const toTranslateSubtitles = subtitles.filter(sub => enqueueTranslation(sub.text, false));
-        if (toTranslateSubtitles.length === 0) {
-            return;
-        }
-        batchTranslationProgress = { current: 0, total: toTranslateSubtitles.length };
-        showBatchTranslationIndicator();
-        // Process in chunks of 10 for better reliability with Google Translate
-        const CHUNK_SIZE = 10;
-        const chunks = [];
-        for (let i = 0; i < toTranslateSubtitles.length; i += CHUNK_SIZE) {
-            chunks.push(toTranslateSubtitles.slice(i, i + CHUNK_SIZE));
-        }
-        for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
-            const chunk = chunks[chunkIndex];
-            const texts = chunk.map(sub => sub.text);
-            // Delay only for free Google scraper endpoint to reduce rate-limit pressure.
-            if (chunkIndex > 0 && translationProvider === 'google') {
-                await sleep(500);
+            batchTranslationProgress = { current: 0, total: toTranslateSubtitles.length };
+            if (!hasShownBatchTranslationIndicator) {
+                showBatchTranslationIndicator();
+                hasShownBatchTranslationIndicator = true;
+                didShowIndicatorThisRun = true;
             }
-            try {
-                const [isSucceeded, translationResponse] = await fetchBatchTranslation(texts);
-                if (isSucceeded) {
-                    const translatedTexts = translationResponse;
-                    const toCacheSubtitleRecords = [];
-                    for (let i = 0; i < texts.length; i++) {
-                        const translatedText = translatedTexts[i];
-                        const rawSubtitleText = texts[i];
-                        if (translatedText === null || translatedText === undefined) {
-                            markTranslationFailed(rawSubtitleText, 'Empty translation response');
-                            continue;
+            // Process in chunks of 10 for better reliability with Google Translate
+            const CHUNK_SIZE = 10;
+            const chunks = [];
+            for (let i = 0; i < toTranslateSubtitles.length; i += CHUNK_SIZE) {
+                chunks.push(toTranslateSubtitles.slice(i, i + CHUNK_SIZE));
+            }
+            for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+                const chunk = chunks[chunkIndex];
+                const texts = chunk.map(sub => sub.text);
+                // Delay only for free Google scraper endpoint to reduce rate-limit pressure.
+                if (chunkIndex > 0 && translationProvider === 'google') {
+                    await sleep(500);
+                }
+                try {
+                    const [isSucceeded, translationResponse] = await fetchBatchTranslation(texts);
+                    if (isSucceeded) {
+                        const translatedTexts = translationResponse;
+                        const toCacheSubtitleRecords = [];
+                        for (let i = 0; i < texts.length; i++) {
+                            const translatedText = translatedTexts[i];
+                            const rawSubtitleText = texts[i];
+                            if (translatedText === null || translatedText === undefined) {
+                                markTranslationFailed(rawSubtitleText, 'Empty translation response');
+                                continue;
+                            }
+                            const translatedTextValue = normalizeSubtitleText(translatedText);
+                            if (!markTranslationSuccess(rawSubtitleText, translatedTextValue)) {
+                                continue;
+                            }
+                            const resolvedEntry = subtitleState.get(toTranslationKey(rawSubtitleText));
+                            const textToCache = resolvedEntry?.status === 'success' && resolvedEntry.text
+                                ? resolvedEntry.text
+                                : translatedTextValue;
+                            if (currentMovieName) {
+                                toCacheSubtitleRecords.push({
+                                    movieName: currentMovieName,
+                                    originalLanguage: "FI",
+                                    targetLanguage,
+                                    originalText: toTranslationKey(rawSubtitleText),
+                                    translatedText: textToCache,
+                                });
+                            }
                         }
-                        const translatedTextValue = normalizeSubtitleText(translatedText);
-                        if (!markTranslationSuccess(rawSubtitleText, translatedTextValue)) {
-                            continue;
-                        }
-                        const resolvedEntry = subtitleState.get(toTranslationKey(rawSubtitleText));
-                        const textToCache = resolvedEntry?.status === 'success' && resolvedEntry.text
-                            ? resolvedEntry.text
-                            : translatedTextValue;
-                        if (currentMovieName) {
-                            toCacheSubtitleRecords.push({
-                                movieName: currentMovieName,
-                                originalLanguage: "FI",
-                                targetLanguage,
-                                originalText: toTranslationKey(rawSubtitleText),
-                                translatedText: textToCache,
+                        // Save to cache
+                        if (globalDatabaseInstance && toCacheSubtitleRecords.length > 0) {
+                            saveSubtitlesBatch(globalDatabaseInstance, toCacheSubtitleRecords).catch((error) => {
+                                console.error("YleDualSubExtension: Error saving batch to cache:", error);
                             });
                         }
                     }
-                    // Save to cache
-                    if (globalDatabaseInstance && toCacheSubtitleRecords.length > 0) {
-                        saveSubtitlesBatch(globalDatabaseInstance, toCacheSubtitleRecords).catch((error) => {
-                            console.error("YleDualSubExtension: Error saving batch to cache:", error);
-                        });
+                    else {
+                        const logBatchError = shouldLogTranslationFailureAsWarning(translationResponse)
+                            ? console.warn
+                            : console.error;
+                        logBatchError("YleDualSubExtension: Batch translation error:", translationResponse);
+                        for (const rawSubtitleText of texts) {
+                            markTranslationFailed(rawSubtitleText, translationResponse);
+                        }
                     }
                 }
-                else {
-                    const logBatchError = shouldLogTranslationFailureAsWarning(translationResponse)
-                        ? console.warn
-                        : console.error;
-                    logBatchError("YleDualSubExtension: Batch translation error:", translationResponse);
+                catch (error) {
+                    const errorMessage = error.message || String(error);
+                    console.error("YleDualSubExtension: Error in batch translation chunk:", error);
                     for (const rawSubtitleText of texts) {
-                        markTranslationFailed(rawSubtitleText, translationResponse);
+                        markTranslationFailed(rawSubtitleText, errorMessage);
                     }
                 }
+                batchTranslationProgress.current += chunk.length;
+                updateBatchTranslationIndicator();
             }
-            catch (error) {
-                const errorMessage = error.message || String(error);
-                console.error("YleDualSubExtension: Error in batch translation chunk:", error);
-                for (const rawSubtitleText of texts) {
-                    markTranslationFailed(rawSubtitleText, errorMessage);
-                }
-            }
-            batchTranslationProgress.current += chunk.length;
-            updateBatchTranslationIndicator();
         }
     }
     finally {
         isBatchTranslating = false;
-        hideBatchTranslationIndicator();
+        if (didShowIndicatorThisRun) {
+            hideBatchTranslationIndicator();
+        }
     }
 }
