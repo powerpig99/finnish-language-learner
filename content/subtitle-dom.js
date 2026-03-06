@@ -243,8 +243,16 @@ function updateTrackedTranslationSpans(key) {
             span.removeAttribute('title');
             continue;
         }
+        if (entry?.status === 'pending') {
+            span.textContent = 'Translating...';
+            span.style.opacity = '';
+            span.removeAttribute('title');
+            remaining.add(span);
+            continue;
+        }
         if (entry?.status === 'failed') {
             renderFailedTranslation(span, originalText, entry);
+            remaining.add(span);
             continue;
         }
         remaining.add(span);
@@ -256,7 +264,7 @@ function updateTrackedTranslationSpans(key) {
         activeTranslationSpans.delete(key);
     }
 }
-document.addEventListener('dscTranslationResolved', (event) => {
+document.addEventListener('dscTranslationStateChanged', (event) => {
     const key = event?.detail?.key;
     if (!key || typeof key !== 'string') {
         return;
@@ -296,7 +304,7 @@ function addContentToDisplayedSubtitlesWrapper(displayedSubtitlesWrapper, origin
         const hasTranslatableContent = hasTranslatableSubtitleContent(finnishText);
         let targetLanguageText = "Translating...";
         let shouldTrackPendingSpan = false;
-        let failedEntryForFallback = null;
+        let shouldRequestVisibleTranslation = false;
         if (!hasTranslatableContent) {
             targetLanguageText = finnishText;
             setPassThroughSubtitleState(finnishText);
@@ -305,25 +313,28 @@ function addContentToDisplayedSubtitlesWrapper(displayedSubtitlesWrapper, origin
             targetLanguageText = stateEntry.text;
         }
         else if (stateEntry?.status === 'failed') {
-            targetLanguageText = finnishText;
-            failedEntryForFallback = stateEntry;
+            shouldTrackPendingSpan = true;
+            shouldRequestVisibleTranslation = true;
         }
         else if (stateEntry?.status === 'pending') {
             shouldTrackPendingSpan = true;
         }
         else {
             shouldTrackPendingSpan = true;
+            shouldRequestVisibleTranslation = true;
         }
         const targetLanguageSpan = createSubtitleSpan(targetLanguageText, `${spanClassName} translated-text-span`);
         targetLanguageSpan.dataset.originalText = finnishText;
         targetLanguageSpan.dataset.translationKey = translationKey;
-        if (failedEntryForFallback) {
-            renderFailedTranslation(targetLanguageSpan, finnishText, failedEntryForFallback);
-        }
         if (shouldTrackPendingSpan) {
             trackActiveTranslationSpan(translationKey, targetLanguageSpan);
         }
         displayedSubtitlesWrapper.appendChild(targetLanguageSpan);
+        if (shouldRequestVisibleTranslation && typeof requestVisibleSubtitleTranslation === 'function') {
+            requestVisibleSubtitleTranslation(finnishText).catch((error) => {
+                console.error('YleDualSubExtension: Error requesting visible subtitle translation:', error);
+            });
+        }
     }
 }
 /**

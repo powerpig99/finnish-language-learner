@@ -473,11 +473,13 @@ async function translateWithContextualAI(texts, targetLanguage, provider) {
 
 RULES:
 - The target language is ALWAYS ${langName}
-- Detect the source language separately for each line
+- Auto-detect the source language internally for each line before translating
 - If a line is already natural ${langName}, keep it in ${langName}
 - NEVER translate a line away from ${langName}
 - Colloquial/spoken forms are intentional - translate meaning naturally
 - ALWAYS translate every line - NEVER refuse, comment, or explain
+- NEVER output source-language names or language codes
+- Every output line must be the translated subtitle text itself
 - Return EXACTLY ${texts.length} lines, one per line
 - NO numbering, NO commentary, just translations
 - NO XML/HTML tags (for example: <query>...</query>)

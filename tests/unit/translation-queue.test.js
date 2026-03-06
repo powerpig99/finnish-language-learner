@@ -20,7 +20,19 @@ function normalizeLanguageCode(langCode) {
     if (!langCode || typeof langCode !== 'string') {
         return 'en';
     }
-    return langCode.toLowerCase().trim().split(/[-_]/)[0] || 'en';
+    const normalized = langCode.toLowerCase().trim();
+    const aliases = {
+        english: 'en',
+        finnish: 'fi',
+        swedish: 'sv',
+        german: 'de',
+        french: 'fr',
+        spanish: 'es',
+    };
+    if (aliases[normalized]) {
+        return aliases[normalized];
+    }
+    return normalized.split(/[-_]/)[0] || 'en';
 }
 
 function buildTranslationQueueHarness() {
@@ -160,9 +172,22 @@ describe('translation queue non-translatable subtitle handling', () => {
         const entry = context.subtitleState.get('.');
         assert.equal(entry?.status, 'success');
         assert.equal(entry?.text, '.');
-        assert.equal(dispatchedEvents.length, 1);
-        assert.equal(dispatchedEvents[0].type, 'dscTranslationResolved');
+        assert.equal(dispatchedEvents.length, 2);
+        assert.equal(dispatchedEvents[0].type, 'dscTranslationStateChanged');
         assert.equal(dispatchedEvents[0].detail?.key, '.');
+        assert.equal(dispatchedEvents[1].type, 'dscTranslationResolved');
+        assert.equal(dispatchedEvents[1].detail?.key, '.');
+    });
+
+    test('enqueueTranslation dispatches state change when subtitle enters pending', () => {
+        const { context, dispatchedEvents } = buildTranslationQueueHarness();
+
+        const movedToPending = context.enqueueTranslation('Hei maailma');
+
+        assert.equal(movedToPending, true);
+        assert.equal(dispatchedEvents.length, 1);
+        assert.equal(dispatchedEvents[0].type, 'dscTranslationStateChanged');
+        assert.equal(dispatchedEvents[0].detail?.key, 'hei maailma');
     });
 
     test('markTranslationSuccess ignores provider text for non-translatable subtitles', () => {
@@ -254,6 +279,36 @@ describe('translation queue non-translatable subtitle handling', () => {
         assert.equal(entry?.text, 'Hello <br> world');
     });
 
+    test('markTranslationSuccess rejects bare language-label output for sentence subtitles', () => {
+        const { context } = buildTranslationQueueHarness();
+        const key = toTranslationKey('Olet tätä sukupolvea');
+        context.detectedSourceLanguage = 'fi';
+        context.targetLanguage = 'EN-US';
+        context.subtitleState.set(key, { status: 'pending', updatedAt: Date.now() });
+
+        const updated = context.markTranslationSuccess('Olet tätä sukupolvea', 'Finnish');
+
+        assert.equal(updated, true);
+        const entry = context.subtitleState.get(key);
+        assert.equal(entry?.status, 'failed');
+        assert.match(entry?.error || '', /language label/i);
+    });
+
+    test('markTranslationSuccess allows language-name translations for short source subtitles', () => {
+        const { context } = buildTranslationQueueHarness();
+        const key = toTranslationKey('suomea');
+        context.detectedSourceLanguage = 'fi';
+        context.targetLanguage = 'EN-US';
+        context.subtitleState.set(key, { status: 'pending', updatedAt: Date.now() });
+
+        const updated = context.markTranslationSuccess('suomea', 'Finnish');
+
+        assert.equal(updated, true);
+        const entry = context.subtitleState.get(key);
+        assert.equal(entry?.status, 'success');
+        assert.equal(entry?.text, 'Finnish');
+    });
+
     test('markTranslationSuccess allows identical text when source and target language match', () => {
         const { context } = buildTranslationQueueHarness();
         const key = toTranslationKey('Hei maailma');
@@ -321,7 +376,7 @@ describe('translation queue non-translatable subtitle handling', () => {
         assert.equal(fetchCallCount, 2);
         assert.equal(entry?.status, 'success');
         assert.equal(entry?.text, 'translated:ensimmäinen');
-        assert.equal(dispatchedEvents.length, 1);
+        assert.equal(dispatchedEvents.length, 3);
     });
 
     test('handleBatchTranslation retries echoed original subtitle responses within the same batch run', async () => {
@@ -346,7 +401,48 @@ describe('translation queue non-translatable subtitle handling', () => {
         assert.equal(fetchCallCount, 2);
         assert.equal(entry?.status, 'success');
         assert.equal(entry?.text, 'hello world');
-        assert.equal(dispatchedEvents.length, 1);
+        assert.equal(dispatchedEvents.length, 3);
+    });
+
+    test('requestVisibleSubtitleTranslation requests missing visible subtitle translation immediately', async () => {
+        const { context } = buildTranslationQueueHarness();
+        let fetchCallCount = 0;
+        context.fetchBatchTranslation = async (_texts) => {
+            fetchCallCount += 1;
+            return [true, ['Hello world']];
+        };
+
+        const wasQueued = await context.requestVisibleSubtitleTranslation('Hei maailma');
+
+        assert.equal(wasQueued, true);
+        assert.equal(fetchCallCount, 1);
+        const entry = context.subtitleState.get(toTranslationKey('Hei maailma'));
+        assert.equal(entry?.status, 'success');
+        assert.equal(entry?.text, 'Hello world');
+    });
+
+    test('requestVisibleSubtitleTranslation bypasses cooldown for failed subtitle and retries immediately', async () => {
+        const { context } = buildTranslationQueueHarness();
+        const key = toTranslationKey('Hei maailma');
+        context.subtitleState.set(key, {
+            status: 'failed',
+            error: 'Translation returned a language label instead of translated subtitle',
+            nextRetryAt: Date.now() + 60_000,
+            updatedAt: Date.now(),
+        });
+        let fetchCallCount = 0;
+        context.fetchBatchTranslation = async (_texts) => {
+            fetchCallCount += 1;
+            return [true, ['Hello world']];
+        };
+
+        const wasQueued = await context.requestVisibleSubtitleTranslation('Hei maailma');
+
+        assert.equal(wasQueued, true);
+        assert.equal(fetchCallCount, 1);
+        const entry = context.subtitleState.get(key);
+        assert.equal(entry?.status, 'success');
+        assert.equal(entry?.text, 'Hello world');
     });
 
     test('handleBatchTranslation marks subtitle as failed only after batch retry limit is exhausted', async () => {
@@ -369,9 +465,12 @@ describe('translation queue non-translatable subtitle handling', () => {
         assert.equal(fetchCallCount, 4);
         assert.equal(entry?.status, 'failed');
         assert.match(entry?.error || '', /batch retry limit reached/);
-        assert.equal(dispatchedEvents.length, 1);
+        assert.equal(dispatchedEvents.length, 3);
         assert.equal(consoleStats.error.length, 1);
         assert.match(consoleStats.error[0][0], /Subtitle translation failed/);
+        assert.match(consoleStats.error[0][0], /failureType=echo_back_failure/);
+        assert.match(consoleStats.error[0][0], /provider=gemini/);
+        assert.match(consoleStats.error[0][0], /providerResponses=\["Hei maailma"\]/);
         assert.equal(consoleStats.error[0][1]?.provider, 'gemini');
         assert.equal(consoleStats.error[0][1]?.failureType, 'echo_back_failure');
         assert.deepEqual(Array.from(consoleStats.error[0][1]?.subtitles || []), ['Hei maailma']);

@@ -210,8 +210,10 @@ describe('Google Cloud provider integration', () => {
 
         assert.equal(result[0], true);
         assert.match(capturedPrompt, /target language is ALWAYS English/i);
-        assert.match(capturedPrompt, /Detect the source language separately for each line/i);
+        assert.match(capturedPrompt, /Auto-detect the source language internally for each line before translating/i);
         assert.match(capturedPrompt, /If a line is already natural English, keep it in English/i);
+        assert.match(capturedPrompt, /NEVER output source-language names or language codes/i);
+        assert.match(capturedPrompt, /Every output line must be the translated subtitle text itself/i);
         assert.doesNotMatch(capturedPrompt, /Source is likely Finnish spoken language/i);
     });
 

@@ -35,6 +35,7 @@ const ControlActions = {
         endTime: typeof subtitle?.endTime === 'number' && Number.isFinite(subtitle.endTime)
           ? subtitle.endTime
           : null,
+        text: typeof subtitle?.text === 'string' ? subtitle.text : '',
       });
     }
 
@@ -55,9 +56,25 @@ const ControlActions = {
           lastTarget.endTime = target.endTime;
         }
       }
+      if (!lastTarget.text && target.text) {
+        lastTarget.text = target.text;
+      }
     }
 
     return uniqueTargets;
+  },
+
+  notifyRepeatSubtitleTarget(target) {
+    const subtitleText = typeof target?.text === 'string' ? target.text.trim() : '';
+    if (!subtitleText) {
+      return;
+    }
+    if (typeof document?.dispatchEvent !== 'function' || typeof CustomEvent !== 'function') {
+      return;
+    }
+    document.dispatchEvent(new CustomEvent('dscRepeatSubtitle', {
+      detail: { subtitleText },
+    }));
   },
 
   seekToSubtitleTarget(video, target) {
@@ -184,9 +201,11 @@ const ControlActions = {
     }
 
     if (currentSubIndex === -1) {
+      this.notifyRepeatSubtitleTarget(targets[0]);
       return this.seekToSubtitleTarget(video, targets[0]);
     }
 
+    this.notifyRepeatSubtitleTarget(targets[currentSubIndex]);
     return this.seekToSubtitleTarget(video, targets[currentSubIndex]);
   },
 

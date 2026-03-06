@@ -47,12 +47,11 @@ How to use:
 Privacy:
 No analytics or tracking. Translation text and word lookups are sent directly from your browser to the provider you choose. API keys are stored locally in Chrome sync storage. No data is sent to developer servers.
 
-What's new in v6.0.0:
-• Zero external dependencies — no build step, no npm packages, pure source JS
-• Owned MP3 encoder replaces external library (lamejs/shine)
-• Removed TypeScript compilation — source loads directly in Chrome
-• Codebase reduced 26% (~5,400 lines removed) through recursive dead code audit
-• All existing features preserved: dual subtitles, popup dictionary, playback controls, audio download
+What's new in v6.2.0:
+• Dual subtitles now initialize reliably on first load without repeated page reloads
+• Subtitle translation failures now include provider, failure type, and provider response details
+• Visible subtitle lines retry translation when cache is missing or a prefetch attempt failed
+• Pressing R repeats audio and retries the current failed subtitle translation
 
 Note:
 Supports YLE Areena only.

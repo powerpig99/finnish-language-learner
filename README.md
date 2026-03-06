@@ -168,6 +168,12 @@ Load the extension in developer mode and test on YLE Areena.
 
 ## Changelog
 
+### v6.2.0 (March 2026)
+- **Fixed:** Dual subtitles now initialize reliably on first load without repeated page reloads
+- **Fixed:** Subtitle translation failures now log provider, failure type, and provider response details
+- **Improved:** Visible subtitle lines retry translation when cache is missing or a prefetch attempt failed
+- **Improved:** Pressing `R` repeats audio and retries the current failed subtitle translation
+
 ### v6.0.0 (February 2026)
 - **Changed:** Zero external dependencies — no build step, no npm packages, source JS loaded directly by Chrome
 - **Changed:** Owned MP3 encoder replaces lamejs/shine external libraries

@@ -109,6 +109,41 @@ function isSourceAndTargetSameLanguage() {
     return normalizeLanguageCode(detectedSourceLanguage) === normalizeLanguageCode(targetLanguage);
 }
 
+function countLetterWords(text) {
+    const matches = String(text || '').match(/\p{L}+/gu);
+    return Array.isArray(matches) ? matches.length : 0;
+}
+
+function isKnownSourceOrTargetLanguageLabel(text) {
+    const normalizedText = normalizeSubtitleText(text);
+    if (!normalizedText) {
+        return false;
+    }
+    // Treat only simple label-like output as a language label, not normal subtitle sentences.
+    if (!/^[\p{L}\s()/-]+$/u.test(normalizedText)) {
+        return false;
+    }
+    const normalizedCandidateLanguage = normalizeLanguageCode(normalizedText);
+    if (!normalizedCandidateLanguage) {
+        return false;
+    }
+    if (normalizedCandidateLanguage === normalizeLanguageCode(targetLanguage)) {
+        return true;
+    }
+    if (typeof detectedSourceLanguage !== 'string' || !detectedSourceLanguage.trim()) {
+        return false;
+    }
+    return normalizedCandidateLanguage === normalizeLanguageCode(detectedSourceLanguage);
+}
+
+function isLikelyLanguageLabelOnlyTranslation(originalText, translatedText) {
+    const normalizedOriginalText = normalizeSubtitleText(originalText);
+    if (countLetterWords(normalizedOriginalText) < 3) {
+        return false;
+    }
+    return isKnownSourceOrTargetLanguageLabel(translatedText);
+}
+
 function stripXmlLikeTags(text) {
     return String(text || '')
         .replace(/<[^>]+>/g, ' ')
@@ -145,7 +180,12 @@ function isLikelyWrappedEchoBackTranslation(originalText, translatedText) {
 }
 
 function dispatchTranslationResolved(key) {
+    dispatchTranslationStateChanged(key);
     document.dispatchEvent(new CustomEvent('dscTranslationResolved', { detail: { key } }));
+}
+
+function dispatchTranslationStateChanged(key) {
+    document.dispatchEvent(new CustomEvent('dscTranslationStateChanged', { detail: { key } }));
 }
 
 function classifySubtitleTranslationResult(rawSubtitleText, translatedText, expectedGeneration = getCurrentTranslationSessionGeneration()) {
@@ -193,6 +233,14 @@ function classifySubtitleTranslationResult(rawSubtitleText, translatedText, expe
             error: 'Translation echoed original text',
         };
     }
+    if (isLikelyLanguageLabelOnlyTranslation(normalizedOriginalText, normalizedTranslatedText)) {
+        return {
+            status: 'language_label_failure',
+            key,
+            normalizedOriginalText,
+            error: 'Translation returned a language label instead of translated subtitle',
+        };
+    }
     return {
         status: 'success',
         key,
@@ -227,7 +275,7 @@ function commitSubtitleTranslationSuccess(normalizedOriginalText, resolvedText, 
  * @param {number} generation
  * @returns {boolean}
  */
-function enqueueTranslation(rawSubtitleText, generation = getCurrentTranslationSessionGeneration()) {
+function enqueueTranslation(rawSubtitleText, generation = getCurrentTranslationSessionGeneration(), options = {}) {
     const normalizedText = normalizeSubtitleText(rawSubtitleText);
     if (!normalizedText) {
         return false;
@@ -236,6 +284,7 @@ function enqueueTranslation(rawSubtitleText, generation = getCurrentTranslationS
         setPassThroughSubtitleState(normalizedText);
         return false;
     }
+    const forceRetry = options?.forceRetry === true;
     const key = toTranslationKey(normalizedText);
     const currentEntry = subtitleState.get(key);
     const now = Date.now();
@@ -245,6 +294,7 @@ function enqueueTranslation(rawSubtitleText, generation = getCurrentTranslationS
     }
     if (currentEntry?.status === 'failed' &&
         isSameGeneration &&
+        !forceRetry &&
         typeof currentEntry.nextRetryAt === 'number' &&
         currentEntry.nextRetryAt > now) {
         return false;
@@ -254,6 +304,7 @@ function enqueueTranslation(rawSubtitleText, generation = getCurrentTranslationS
         generation,
         updatedAt: now,
     });
+    dispatchTranslationStateChanged(key);
     return true;
 }
 /**
@@ -386,16 +437,44 @@ function mergeSubtitlesIntoNavigationCache(subtitles) {
     // Note: Call setSubtitles even if panel isn't mounted yet - it just stores the data
     ControlIntegration.setSubtitles(fullSubtitles);
 }
-function queuePendingBatchSubtitles(subtitles, generation = getCurrentTranslationSessionGeneration()) {
+function queuePendingBatchSubtitles(subtitles, generation = getCurrentTranslationSessionGeneration(), options = {}) {
     if (!Array.isArray(subtitles) || subtitles.length === 0) {
         return;
     }
-    pendingBatchSubtitles.push({ subtitles, generation });
+    pendingBatchSubtitles.push({
+        subtitles,
+        generation,
+        forceRetry: options.forceRetry === true,
+        suppressIndicator: options.suppressIndicator === true,
+    });
 }
 
 function appendBatchRetryLimitReached(errorMessage) {
     const message = String(errorMessage || 'Translation failed').trim();
     return `${message} (batch retry limit reached)`;
+}
+
+function buildSubtitleTranslationFailureSummary(payload) {
+    const compactSubtitles = Array.isArray(payload.subtitles)
+        ? payload.subtitles.slice(0, 3)
+        : payload.subtitles;
+    const compactProviderResponses = Array.isArray(payload.providerResponses)
+        ? payload.providerResponses.slice(0, 3)
+        : payload.providerResponses;
+    const summaryParts = [
+        'YleDualSubExtension: Subtitle translation failed',
+        `provider=${payload.provider || 'unknown'}`,
+        `failureType=${payload.failureType || 'unknown'}`,
+        `targetLanguage=${payload.targetLanguage || 'unknown'}`,
+        `attempts=${typeof payload.attempts === 'number' ? payload.attempts : 'n/a'}`,
+        `error=${JSON.stringify(String(payload.error || 'Translation failed'))}`,
+        `subtitles=${JSON.stringify(compactSubtitles)}`,
+        `providerResponses=${JSON.stringify(compactProviderResponses)}`,
+    ];
+    if (payload.movieName) {
+        summaryParts.push(`movieName=${JSON.stringify(payload.movieName)}`);
+    }
+    return summaryParts.join(' ');
 }
 
 function logSubtitleTranslationFailure({
@@ -406,10 +485,7 @@ function logSubtitleTranslationFailure({
     providerResponses = null,
     attempts = null,
 }) {
-    const logFailure = shouldLogTranslationFailureAsWarning(errorMessage)
-        ? console.warn
-        : console.error;
-    logFailure('YleDualSubExtension: Subtitle translation failed', {
+    const payload = {
         provider: provider || 'unknown',
         movieName: typeof currentMovieName === 'string' ? currentMovieName : null,
         targetLanguage,
@@ -418,7 +494,11 @@ function logSubtitleTranslationFailure({
         attempts,
         subtitles: Array.isArray(subtitles) ? subtitles.slice() : [],
         providerResponses: Array.isArray(providerResponses) ? providerResponses.slice() : providerResponses,
-    });
+    };
+    const logFailure = shouldLogTranslationFailureAsWarning(errorMessage)
+        ? console.warn
+        : console.error;
+    logFailure(buildSubtitleTranslationFailureSummary(payload), payload);
 }
 
 async function processSubtitleChunkWithRetries(chunk, batchGeneration, translationProvider) {
@@ -544,7 +624,7 @@ async function processSubtitleChunkWithRetries(chunk, batchGeneration, translati
  * @param {Array<{text: string, startTime: number, endTime: number}>} subtitles - All subtitles with timing
  * @returns {Promise<void>}
  */
-async function handleBatchTranslation(subtitles) {
+async function handleBatchTranslation(subtitles, options = {}) {
     if (!Array.isArray(subtitles) || subtitles.length === 0) {
         return;
     }
@@ -554,7 +634,7 @@ async function handleBatchTranslation(subtitles) {
         hasShownBatchTranslationIndicator = false;
     }
     mergeSubtitlesIntoNavigationCache(subtitles);
-    queuePendingBatchSubtitles(subtitles, getCurrentTranslationSessionGeneration());
+    queuePendingBatchSubtitles(subtitles, getCurrentTranslationSessionGeneration(), options);
     if (isBatchTranslating) {
         return;
     }
@@ -567,16 +647,18 @@ async function handleBatchTranslation(subtitles) {
             const batchGeneration = typeof queuedBatch?.generation === 'number'
                 ? queuedBatch.generation
                 : getCurrentTranslationSessionGeneration();
+            const forceRetry = queuedBatch?.forceRetry === true;
+            const suppressIndicator = queuedBatch?.suppressIndicator === true;
             if (!Array.isArray(currentBatch) || currentBatch.length === 0) {
                 continue;
             }
             const translationProvider = getCurrentTranslationProvider();
-            const toTranslateSubtitles = currentBatch.filter(sub => enqueueTranslation(sub.text, batchGeneration));
+            const toTranslateSubtitles = currentBatch.filter(sub => enqueueTranslation(sub.text, batchGeneration, { forceRetry }));
             if (toTranslateSubtitles.length === 0) {
                 continue;
             }
             batchTranslationProgress = { current: 0, total: toTranslateSubtitles.length };
-            if (!hasShownBatchTranslationIndicator) {
+            if (!suppressIndicator && !hasShownBatchTranslationIndicator) {
                 showBatchTranslationIndicator();
                 hasShownBatchTranslationIndicator = true;
                 didShowIndicatorThisRun = true;
@@ -603,7 +685,7 @@ async function handleBatchTranslation(subtitles) {
                         console.error("YleDualSubExtension: Error saving batch to cache:", error);
                     });
                 }
-                if (isCurrentTranslationSessionGeneration(batchGeneration)) {
+                if (!suppressIndicator && isCurrentTranslationSessionGeneration(batchGeneration)) {
                     batchTranslationProgress.current += completedCount;
                     updateBatchTranslationIndicator();
                 }
@@ -616,4 +698,34 @@ async function handleBatchTranslation(subtitles) {
             hideBatchTranslationIndicator();
         }
     }
+}
+
+async function requestVisibleSubtitleTranslation(rawSubtitleText) {
+    const normalizedText = normalizeSubtitleText(rawSubtitleText);
+    if (!normalizedText || !hasTranslatableSubtitleContent(normalizedText)) {
+        return false;
+    }
+    const key = toTranslationKey(normalizedText);
+    const currentEntry = subtitleState.get(key);
+    if (currentEntry?.status === 'success' || currentEntry?.status === 'pending') {
+        return false;
+    }
+    await handleBatchTranslation([{ text: normalizedText }], {
+        forceRetry: currentEntry?.status === 'failed',
+        suppressIndicator: true,
+    });
+    return true;
+}
+
+async function retryFailedSubtitleTranslation(rawSubtitleText) {
+    const normalizedText = normalizeSubtitleText(rawSubtitleText);
+    if (!normalizedText) {
+        return false;
+    }
+    const key = toTranslationKey(normalizedText);
+    const currentEntry = subtitleState.get(key);
+    if (currentEntry?.status !== 'failed') {
+        return false;
+    }
+    return requestVisibleSubtitleTranslation(normalizedText);
 }

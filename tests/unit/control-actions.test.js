@@ -8,7 +8,10 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { describe, test } = require('node:test');
 
-function buildControlActionsHarness(video, { primeAutoPauseNavigationTarget = null } = {}) {
+function buildControlActionsHarness(video, {
+    primeAutoPauseNavigationTarget = null,
+    dispatchEvent = null,
+} = {}) {
     const context = {
         window: {},
         document: {
@@ -18,6 +21,13 @@ function buildControlActionsHarness(video, { primeAutoPauseNavigationTarget = nu
                 }
                 return null;
             },
+            dispatchEvent: typeof dispatchEvent === 'function' ? dispatchEvent : undefined,
+        },
+        CustomEvent: class CustomEvent {
+            constructor(type, init = {}) {
+                this.type = type;
+                this.detail = init.detail;
+            }
         },
     };
     if (typeof primeAutoPauseNavigationTarget === 'function') {
@@ -236,5 +246,29 @@ describe('ControlActions subtitle navigation', () => {
         assert.deepEqual(primedEndTimes, [37]);
         assert.equal(video.currentTime, 35);
         assert.equal(video.playCalls, 1);
+    });
+
+    test('repeatCurrentSubtitle dispatches current subtitle text for retry handling', () => {
+        const dispatchedEvents = [];
+        const video = makeVideo({
+            currentTime: 35.2,
+            paused: true,
+            textTracks: [],
+        });
+        const controlActions = buildControlActionsHarness(video, {
+            dispatchEvent: (event) => {
+                dispatchedEvents.push(event);
+            },
+        });
+
+        controlActions.repeatCurrentSubtitle([
+            { startTime: 2, endTime: 3, text: 'one' },
+            { startTime: 35, endTime: 37, text: 'two' },
+            { startTime: 50, endTime: 52, text: 'three' },
+        ]);
+
+        assert.equal(dispatchedEvents.length, 1);
+        assert.equal(dispatchedEvents[0].type, 'dscRepeatSubtitle');
+        assert.equal(dispatchedEvents[0].detail?.subtitleText, 'two');
     });
 });

@@ -229,6 +229,15 @@ document.addEventListener('dscSourceLangChange', () => {
     // Clear translations when language changes
     clearSubtitleTranslationState();
 });
+document.addEventListener('dscRepeatSubtitle', (e) => {
+    const subtitleText = e?.detail?.subtitleText;
+    if (typeof requestVisibleSubtitleTranslation !== 'function') {
+        return;
+    }
+    requestVisibleSubtitleTranslation(subtitleText).catch((error) => {
+        console.error('YleDualSubExtension: Error retrying failed subtitle translation:', error);
+    });
+});
 // Handle target language changes without reloading the YLE page.
 document.addEventListener('dscTargetLanguageChanged', () => {
     // Drop in-memory translations from previous target language.
