@@ -62,6 +62,7 @@ const TRANSLATION_FAILURE_COOLDOWN_MS = 30000;
 const ECHO_BACK_BASE_COOLDOWN_MS = 30000;
 const ECHO_BACK_MAX_COOLDOWN_MS = 5 * 60 * 1000;
 const ECHO_BACK_MAX_RETRIES = 4;
+const BATCH_SUBTITLE_MAX_ATTEMPTS = 4;
 const echoBackRetryCounts = new Map();
 
 function clearEchoBackRetryState(key) {
@@ -146,6 +147,80 @@ function isLikelyWrappedEchoBackTranslation(originalText, translatedText) {
 function dispatchTranslationResolved(key) {
     document.dispatchEvent(new CustomEvent('dscTranslationResolved', { detail: { key } }));
 }
+
+function classifySubtitleTranslationResult(rawSubtitleText, translatedText, expectedGeneration = getCurrentTranslationSessionGeneration()) {
+    const normalizedOriginalText = normalizeSubtitleText(rawSubtitleText);
+    const key = toTranslationKey(normalizedOriginalText);
+    const existingEntry = subtitleState.get(key);
+    if (!existingEntry || existingEntry.status !== 'pending') {
+        return { status: 'stale' };
+    }
+    if (typeof existingEntry.generation === 'number' && existingEntry.generation !== expectedGeneration) {
+        return { status: 'stale' };
+    }
+    if (!hasTranslatableSubtitleContent(normalizedOriginalText)) {
+        return {
+            status: 'success',
+            key,
+            normalizedOriginalText,
+            text: normalizedOriginalText,
+        };
+    }
+    if (translatedText === null || translatedText === undefined) {
+        return {
+            status: 'empty_failure',
+            key,
+            normalizedOriginalText,
+            error: 'Empty translation response',
+        };
+    }
+    const normalizedTranslatedText = normalizeSubtitleText(translatedText);
+    if (!normalizedTranslatedText) {
+        return {
+            status: 'empty_failure',
+            key,
+            normalizedOriginalText,
+            error: 'Empty translation response',
+        };
+    }
+    const isDirectEchoBack = toTranslationKey(normalizedTranslatedText) === toTranslationKey(normalizedOriginalText);
+    const isWrappedEchoBack = isLikelyWrappedEchoBackTranslation(normalizedOriginalText, normalizedTranslatedText);
+    if (!isSourceAndTargetSameLanguage() && (isDirectEchoBack || isWrappedEchoBack)) {
+        return {
+            status: 'echo_back_failure',
+            key,
+            normalizedOriginalText,
+            error: 'Translation echoed original text',
+        };
+    }
+    return {
+        status: 'success',
+        key,
+        normalizedOriginalText,
+        text: normalizedTranslatedText,
+    };
+}
+
+function commitSubtitleTranslationSuccess(normalizedOriginalText, resolvedText, expectedGeneration = getCurrentTranslationSessionGeneration()) {
+    const key = toTranslationKey(normalizedOriginalText);
+    const existingEntry = subtitleState.get(key);
+    if (!existingEntry || existingEntry.status !== 'pending') {
+        return false;
+    }
+    if (typeof existingEntry.generation === 'number' && existingEntry.generation !== expectedGeneration) {
+        return false;
+    }
+    subtitleState.set(key, {
+        status: 'success',
+        text: resolvedText,
+        generation: expectedGeneration,
+        updatedAt: Date.now(),
+    });
+    clearEchoBackRetryState(key);
+    dispatchTranslationResolved(key);
+    return true;
+}
+
 /**
  * Mark subtitle translation as pending for the authoritative batch workflow.
  * @param {string} rawSubtitleText
@@ -189,42 +264,19 @@ function enqueueTranslation(rawSubtitleText, generation = getCurrentTranslationS
  * @returns {boolean}
  */
 function markTranslationSuccess(rawSubtitleText, translatedText, expectedGeneration = getCurrentTranslationSessionGeneration()) {
-    const normalizedOriginalText = normalizeSubtitleText(rawSubtitleText);
-    const key = toTranslationKey(normalizedOriginalText);
-    const existingEntry = subtitleState.get(key);
-    // Language change/reset can clear state while requests are in flight.
-    // Ignore stale completions so old-language results cannot repopulate state.
-    if (!existingEntry || existingEntry.status !== 'pending') {
+    const result = classifySubtitleTranslationResult(rawSubtitleText, translatedText, expectedGeneration);
+    if (result.status === 'stale') {
         return false;
     }
-    if (typeof existingEntry.generation === 'number' && existingEntry.generation !== expectedGeneration) {
-        return false;
+    if (result.status === 'success') {
+        return commitSubtitleTranslationSuccess(result.normalizedOriginalText, result.text, expectedGeneration);
     }
-    const normalizedTranslatedText = normalizeSubtitleText(translatedText);
-    const isDirectEchoBack = toTranslationKey(normalizedTranslatedText) === toTranslationKey(normalizedOriginalText);
-    const isWrappedEchoBack = isLikelyWrappedEchoBackTranslation(normalizedOriginalText, normalizedTranslatedText);
-    if (hasTranslatableSubtitleContent(normalizedOriginalText) &&
-        !isSourceAndTargetSameLanguage() &&
-        (isDirectEchoBack || isWrappedEchoBack)) {
-        return markTranslationFailed(rawSubtitleText, 'Translation echoed original text', {
+    if (result.status === 'echo_back_failure') {
+        return markTranslationFailed(rawSubtitleText, result.error, {
             isEchoBack: true,
         }, expectedGeneration);
     }
-    const resolvedText = hasTranslatableSubtitleContent(normalizedOriginalText)
-        ? normalizedTranslatedText
-        : normalizedOriginalText;
-    if (!resolvedText) {
-        return markTranslationFailed(rawSubtitleText, 'Empty translation response', TRANSLATION_FAILURE_COOLDOWN_MS, expectedGeneration);
-    }
-    subtitleState.set(key, {
-        status: 'success',
-        text: resolvedText,
-        generation: expectedGeneration,
-        updatedAt: Date.now(),
-    });
-    clearEchoBackRetryState(key);
-    dispatchTranslationResolved(key);
-    return true;
+    return markTranslationFailed(rawSubtitleText, result.error, TRANSLATION_FAILURE_COOLDOWN_MS, expectedGeneration);
 }
 /**
  * Transition subtitle state from pending to failed.
@@ -340,6 +392,153 @@ function queuePendingBatchSubtitles(subtitles, generation = getCurrentTranslatio
     }
     pendingBatchSubtitles.push({ subtitles, generation });
 }
+
+function appendBatchRetryLimitReached(errorMessage) {
+    const message = String(errorMessage || 'Translation failed').trim();
+    return `${message} (batch retry limit reached)`;
+}
+
+function logSubtitleTranslationFailure({
+    provider,
+    failureType,
+    errorMessage,
+    subtitles,
+    providerResponses = null,
+    attempts = null,
+}) {
+    const logFailure = shouldLogTranslationFailureAsWarning(errorMessage)
+        ? console.warn
+        : console.error;
+    logFailure('YleDualSubExtension: Subtitle translation failed', {
+        provider: provider || 'unknown',
+        movieName: typeof currentMovieName === 'string' ? currentMovieName : null,
+        targetLanguage,
+        failureType,
+        error: String(errorMessage || 'Translation failed'),
+        attempts,
+        subtitles: Array.isArray(subtitles) ? subtitles.slice() : [],
+        providerResponses: Array.isArray(providerResponses) ? providerResponses.slice() : providerResponses,
+    });
+}
+
+async function processSubtitleChunkWithRetries(chunk, batchGeneration, translationProvider) {
+    const toCacheSubtitleRecords = [];
+    let completedCount = 0;
+    let pendingSubtitles = chunk.slice();
+    const lastFailureDetails = new Map();
+
+    for (let attempt = 1; attempt <= BATCH_SUBTITLE_MAX_ATTEMPTS && pendingSubtitles.length > 0; attempt++) {
+        const texts = pendingSubtitles.map(sub => sub.text);
+        const isFinalAttempt = attempt === BATCH_SUBTITLE_MAX_ATTEMPTS;
+
+        if (attempt > 1 && translationProvider === 'google') {
+            await sleep(500);
+        }
+
+        try {
+            const [isSucceeded, translationResponse] = await fetchBatchTranslation(texts);
+            if (!isSucceeded) {
+                if (!isFinalAttempt) {
+                    continue;
+                }
+                const finalErrorMessage = appendBatchRetryLimitReached(translationResponse);
+                logSubtitleTranslationFailure({
+                    provider: translationProvider,
+                    failureType: 'provider_request_failed',
+                    errorMessage: finalErrorMessage,
+                    subtitles: texts,
+                    attempts: attempt,
+                });
+                for (const rawSubtitleText of texts) {
+                    if (markTranslationFailed(rawSubtitleText, finalErrorMessage, TRANSLATION_FAILURE_COOLDOWN_MS, batchGeneration)) {
+                        completedCount += 1;
+                    }
+                }
+                break;
+            }
+
+            const translatedTexts = Array.isArray(translationResponse) ? translationResponse : [];
+            const nextPendingSubtitles = [];
+
+            for (let i = 0; i < texts.length; i++) {
+                const subtitle = pendingSubtitles[i];
+                const rawSubtitleText = texts[i];
+                const result = classifySubtitleTranslationResult(rawSubtitleText, translatedTexts[i], batchGeneration);
+
+                if (result.status === 'stale') {
+                    continue;
+                }
+                if (result.status === 'success') {
+                    if (!commitSubtitleTranslationSuccess(result.normalizedOriginalText, result.text, batchGeneration)) {
+                        continue;
+                    }
+                    completedCount += 1;
+                    if (currentMovieName) {
+                        toCacheSubtitleRecords.push({
+                            movieName: currentMovieName,
+                            originalLanguage: "FI",
+                            targetLanguage,
+                            originalText: toTranslationKey(rawSubtitleText),
+                            translatedText: result.text,
+                        });
+                    }
+                    continue;
+                }
+                lastFailureDetails.set(rawSubtitleText, {
+                    failureType: result.status,
+                    providerResponse: translatedTexts[i] ?? null,
+                    error: result.error,
+                });
+                if (!isFinalAttempt) {
+                    nextPendingSubtitles.push(subtitle);
+                    continue;
+                }
+                const finalErrorMessage = appendBatchRetryLimitReached(result.error);
+                if (markTranslationFailed(
+                    rawSubtitleText,
+                    finalErrorMessage,
+                    TRANSLATION_FAILURE_COOLDOWN_MS,
+                    batchGeneration
+                )) {
+                    completedCount += 1;
+                }
+                const failureDetail = lastFailureDetails.get(rawSubtitleText);
+                logSubtitleTranslationFailure({
+                    provider: translationProvider,
+                    failureType: failureDetail?.failureType || result.status,
+                    errorMessage: finalErrorMessage,
+                    subtitles: [rawSubtitleText],
+                    providerResponses: [failureDetail?.providerResponse ?? translatedTexts[i] ?? null],
+                    attempts: attempt,
+                });
+            }
+
+            pendingSubtitles = nextPendingSubtitles;
+        }
+        catch (error) {
+            if (!isFinalAttempt) {
+                continue;
+            }
+            const errorMessage = appendBatchRetryLimitReached(error.message || String(error));
+            logSubtitleTranslationFailure({
+                provider: translationProvider,
+                failureType: 'provider_exception',
+                errorMessage,
+                subtitles: texts,
+                attempts: attempt,
+            });
+            for (const rawSubtitleText of texts) {
+                if (markTranslationFailed(rawSubtitleText, errorMessage, TRANSLATION_FAILURE_COOLDOWN_MS, batchGeneration)) {
+                    completedCount += 1;
+                }
+            }
+            break;
+        }
+    }
+
+    return { completedCount, toCacheSubtitleRecords };
+}
+
 /**
  * Handle batch translation of all subtitles with context
  * @param {Array<{text: string, startTime: number, endTime: number}>} subtitles - All subtitles with timing
@@ -390,67 +589,22 @@ async function handleBatchTranslation(subtitles) {
             }
             for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
                 const chunk = chunks[chunkIndex];
-                const texts = chunk.map(sub => sub.text);
                 // Delay only for free Google scraper endpoint to reduce rate-limit pressure.
                 if (chunkIndex > 0 && translationProvider === 'google') {
                     await sleep(500);
                 }
-                try {
-                    const [isSucceeded, translationResponse] = await fetchBatchTranslation(texts);
-                    if (isSucceeded) {
-                        const translatedTexts = translationResponse;
-                        const toCacheSubtitleRecords = [];
-                        for (let i = 0; i < texts.length; i++) {
-                            const translatedText = translatedTexts[i];
-                            const rawSubtitleText = texts[i];
-                            if (translatedText === null || translatedText === undefined) {
-                                markTranslationFailed(rawSubtitleText, 'Empty translation response', TRANSLATION_FAILURE_COOLDOWN_MS, batchGeneration);
-                                continue;
-                            }
-                            const translatedTextValue = normalizeSubtitleText(translatedText);
-                            if (!markTranslationSuccess(rawSubtitleText, translatedTextValue, batchGeneration)) {
-                                continue;
-                            }
-                            const resolvedEntry = subtitleState.get(toTranslationKey(rawSubtitleText));
-                            const textToCache = resolvedEntry?.status === 'success' && resolvedEntry.text
-                                ? resolvedEntry.text
-                                : translatedTextValue;
-                            if (currentMovieName) {
-                                toCacheSubtitleRecords.push({
-                                    movieName: currentMovieName,
-                                    originalLanguage: "FI",
-                                    targetLanguage,
-                                    originalText: toTranslationKey(rawSubtitleText),
-                                    translatedText: textToCache,
-                                });
-                            }
-                        }
-                        // Save to cache
-                        if (globalDatabaseInstance && toCacheSubtitleRecords.length > 0) {
-                            saveSubtitlesBatch(globalDatabaseInstance, toCacheSubtitleRecords).catch((error) => {
-                                console.error("YleDualSubExtension: Error saving batch to cache:", error);
-                            });
-                        }
-                    }
-                    else {
-                        const logBatchError = shouldLogTranslationFailureAsWarning(translationResponse)
-                            ? console.warn
-                            : console.error;
-                        logBatchError("YleDualSubExtension: Batch translation error:", translationResponse);
-                        for (const rawSubtitleText of texts) {
-                            markTranslationFailed(rawSubtitleText, translationResponse, TRANSLATION_FAILURE_COOLDOWN_MS, batchGeneration);
-                        }
-                    }
-                }
-                catch (error) {
-                    const errorMessage = error.message || String(error);
-                    console.error("YleDualSubExtension: Error in batch translation chunk:", error);
-                    for (const rawSubtitleText of texts) {
-                        markTranslationFailed(rawSubtitleText, errorMessage, TRANSLATION_FAILURE_COOLDOWN_MS, batchGeneration);
-                    }
+                const { completedCount, toCacheSubtitleRecords } = await processSubtitleChunkWithRetries(
+                    chunk,
+                    batchGeneration,
+                    translationProvider
+                );
+                if (globalDatabaseInstance && toCacheSubtitleRecords.length > 0) {
+                    saveSubtitlesBatch(globalDatabaseInstance, toCacheSubtitleRecords).catch((error) => {
+                        console.error("YleDualSubExtension: Error saving batch to cache:", error);
+                    });
                 }
                 if (isCurrentTranslationSessionGeneration(batchGeneration)) {
-                    batchTranslationProgress.current += chunk.length;
+                    batchTranslationProgress.current += completedCount;
                     updateBatchTranslationIndicator();
                 }
             }

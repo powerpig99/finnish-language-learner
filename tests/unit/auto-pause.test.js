@@ -80,6 +80,8 @@ function buildAutoPauseHarness({ video, autoPauseEnabled = true, extensionEnable
     const settingsSource = fs.readFileSync(settingsPath, 'utf8');
     const functionSources = [
         extractFunctionSource(settingsSource, 'function setCurrentSubtitleEndTime(endTime)'),
+        extractFunctionSource(settingsSource, 'function primeAutoPauseNavigationTarget(endTime)'),
+        extractFunctionSource(settingsSource, 'function handleVideoSeekedForAutoPause()'),
         extractFunctionSource(settingsSource, 'function getActiveCueEndTime(video)'),
         extractFunctionSource(settingsSource, 'function scheduleAutoPauseLookupRetry()'),
         extractFunctionSource(settingsSource, 'function scheduleAutoPause(fromRetry = false)'),
@@ -92,6 +94,7 @@ let _autoPauseLookupRetryCount = 0;
 const AUTO_PAUSE_LOOKUP_RETRY_LIMIT = 3;
 const AUTO_PAUSE_LOOKUP_RETRY_DELAY_MS = 120;
 let _currentSubtitleEndTime = null;
+let _queuedNavigationSubtitleEndTime = null;
 let autoPauseEnabled = globalThis.__autoPauseEnabled;
 let extensionEnabled = globalThis.__extensionEnabled;
 
@@ -99,6 +102,8 @@ ${functionSources}
 
 globalThis.__autoPauseApi = {
     setCurrentSubtitleEndTime,
+    primeAutoPauseNavigationTarget,
+    handleVideoSeekedForAutoPause,
     getActiveCueEndTime,
     scheduleAutoPause,
     clearAutoPause,
@@ -106,6 +111,7 @@ globalThis.__autoPauseApi = {
         autoPauseTimeout: _autoPauseTimeout,
         autoPauseLookupRetryCount: _autoPauseLookupRetryCount,
         currentSubtitleEndTime: _currentSubtitleEndTime,
+        queuedNavigationSubtitleEndTime: _queuedNavigationSubtitleEndTime,
     }),
 };
 `;
@@ -210,5 +216,39 @@ describe('auto-pause scheduling', () => {
 
         assert.equal(video.pauseCalls, 1);
         assert.equal(api.getState().autoPauseLookupRetryCount, 0);
+    });
+
+    test('prefers primed navigation timing over stale subtitle timing before seek completes', () => {
+        const video = makeVideo({
+            currentTime: 35.0,
+            tracks: [],
+        });
+
+        const { api, timers } = buildAutoPauseHarness({ video });
+        api.setCurrentSubtitleEndTime(12.0);
+        api.primeAutoPauseNavigationTarget(37.0);
+        api.scheduleAutoPause();
+
+        assert.equal(timers.size, 1);
+        const [[, timerMeta]] = Array.from(timers.entries());
+        assert.ok(timerMeta.delay > 1900 && timerMeta.delay < 2000);
+        assert.equal(api.getState().queuedNavigationSubtitleEndTime, 37.0);
+    });
+
+    test('seeked consumes primed navigation timing without waiting for active cues', () => {
+        const video = makeVideo({
+            currentTime: 30.0,
+            tracks: [{ mode: 'showing', activeCues: [] }],
+        });
+
+        const { api, timers } = buildAutoPauseHarness({ video });
+        api.primeAutoPauseNavigationTarget(31.2);
+        api.handleVideoSeekedForAutoPause();
+
+        assert.equal(timers.size, 1);
+        const [[, timerMeta]] = Array.from(timers.entries());
+        assert.ok(timerMeta.delay > 1100 && timerMeta.delay < 1200);
+        assert.equal(api.getState().currentSubtitleEndTime, 31.2);
+        assert.equal(api.getState().queuedNavigationSubtitleEndTime, null);
     });
 });

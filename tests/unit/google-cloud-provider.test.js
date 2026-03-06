@@ -184,6 +184,37 @@ describe('Google Cloud provider integration', () => {
         assert.equal(translations[1], null);
     });
 
+    test('contextual subtitle prompt keeps target language authoritative for mixed-language lines', async () => {
+        const { context } = buildBackgroundHarness({
+            translationProvider: 'gemini',
+            geminiApiKey: 'gemini-key',
+        });
+
+        let capturedPrompt = '';
+        context.fetch = async (_url, options = {}) => {
+            const body = JSON.parse(String(options.body || '{}'));
+            capturedPrompt = body.contents?.[0]?.parts?.[0]?.text || '';
+            return jsonResponse({
+                candidates: [
+                    {
+                        content: {
+                            parts: [{ text: 'Hello\nAlready English' }],
+                        },
+                    },
+                ],
+            });
+        };
+
+        await context.loadProviderConfig();
+        const result = await context.translateBatchWithContext(['Moi', 'Already English'], 'EN-US', true);
+
+        assert.equal(result[0], true);
+        assert.match(capturedPrompt, /target language is ALWAYS English/i);
+        assert.match(capturedPrompt, /Detect the source language separately for each line/i);
+        assert.match(capturedPrompt, /If a line is already natural English, keep it in English/i);
+        assert.doesNotMatch(capturedPrompt, /Source is likely Finnish spoken language/i);
+    });
+
     test('routes translateTexts to Google Cloud implementation when provider is googleCloud', async () => {
         const { context } = buildBackgroundHarness({
             translationProvider: 'googleCloud',

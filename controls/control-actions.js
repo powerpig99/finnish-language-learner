@@ -14,54 +14,66 @@ const ControlActions = {
   },
 
   /**
-   * Build sorted, de-duplicated subtitle start times for navigation.
-   * Prefers prefetched subtitle timing (from intercepted VTT) for deterministic
-   * long-gap navigation, with active text-track cues as fallback.
-   * @param {HTMLVideoElement} video
-   * @param {Array<{startTime: number}>} subtitles
-   * @returns {number[]}
+   * Build sorted, de-duplicated subtitle timing targets for navigation.
+   * Prefetched subtitle timing is the only authoritative navigation source.
+   * @param {Array<{startTime: number, endTime?: number|null}>} subtitles
+   * @returns {Array<{startTime: number, endTime: number|null}>}
    */
-  getNavigationStartTimes(video, subtitles = []) {
+  getNavigationTargets(subtitles = []) {
     const EPSILON = 0.001;
-    const cueTimes = [];
-    const hasPrefetchedSubtitles = Array.isArray(subtitles) && subtitles.length > 0;
+    const targets = [];
+    if (!Array.isArray(subtitles) || subtitles.length === 0) {
+      return [];
+    }
 
-    if (hasPrefetchedSubtitles) {
-      for (const subtitle of subtitles) {
-        const startTime = subtitle?.startTime;
-        if (typeof startTime === 'number' && Number.isFinite(startTime)) {
-          cueTimes.push(startTime);
-        }
+    for (const subtitle of subtitles) {
+      const startTime = subtitle?.startTime;
+      if (typeof startTime !== 'number' || !Number.isFinite(startTime)) continue;
+
+      targets.push({
+        startTime,
+        endTime: typeof subtitle?.endTime === 'number' && Number.isFinite(subtitle.endTime)
+          ? subtitle.endTime
+          : null,
+      });
+    }
+
+    if (targets.length === 0) return [];
+
+    targets.sort((a, b) => a.startTime - b.startTime);
+
+    const uniqueTargets = [targets[0]];
+    for (let i = 1; i < targets.length; i++) {
+      const target = targets[i];
+      const lastTarget = uniqueTargets[uniqueTargets.length - 1];
+      if (target.startTime > lastTarget.startTime + EPSILON) {
+        uniqueTargets.push(target);
+        continue;
       }
-    } else if (video && video.textTracks && video.textTracks.length > 0) {
-      for (const track of Array.from(video.textTracks)) {
-        if (!track) continue;
-        const cues = track.cues;
-        if (track.mode === 'disabled') continue;
-        if (!cues || cues.length === 0) continue;
-
-        for (let i = 0; i < cues.length; i++) {
-          const cue = cues[i];
-          if (typeof cue.startTime === 'number' && Number.isFinite(cue.startTime)) {
-            cueTimes.push(cue.startTime);
-          }
+      if (typeof target.endTime === 'number' && Number.isFinite(target.endTime)) {
+        if (lastTarget.endTime === null || target.endTime > lastTarget.endTime) {
+          lastTarget.endTime = target.endTime;
         }
       }
     }
 
-    if (cueTimes.length === 0) return [];
+    return uniqueTargets;
+  },
 
-    cueTimes.sort((a, b) => a - b);
-
-    const uniqueTimes = [cueTimes[0]];
-    for (let i = 1; i < cueTimes.length; i++) {
-      const time = cueTimes[i];
-      if (time > uniqueTimes[uniqueTimes.length - 1] + EPSILON) {
-        uniqueTimes.push(time);
-      }
+  seekToSubtitleTarget(video, target) {
+    if (!video || !target || typeof target.startTime !== 'number' || !Number.isFinite(target.startTime)) {
+      return false;
     }
 
-    return uniqueTimes;
+    if (typeof primeAutoPauseNavigationTarget === 'function') {
+      primeAutoPauseNavigationTarget(target.endTime);
+    }
+
+    video.currentTime = target.startTime;
+    if (video.paused) {
+      video.play();
+    }
+    return true;
   },
 
   /**
@@ -87,38 +99,28 @@ const ControlActions = {
    */
   skipToPreviousSubtitle(subtitles = []) {
     const video = this.getVideoElement();
-    if (!video) return;
+    if (!video) return false;
 
     const currentTime = video.currentTime;
-    const startTimes = this.getNavigationStartTimes(video, subtitles);
+    const targets = this.getNavigationTargets(subtitles);
     const EPSILON = 0.001;
 
-    if (startTimes.length === 0) return;
+    if (targets.length === 0) return false;
 
     // Find current subtitle index (last one that started at or before currentTime)
     let currentSubIndex = -1;
-    for (let i = startTimes.length - 1; i >= 0; i--) {
-      if (startTimes[i] <= currentTime + EPSILON) {
+    for (let i = targets.length - 1; i >= 0; i--) {
+      if (targets[i].startTime <= currentTime + EPSILON) {
         currentSubIndex = i;
         break;
       }
     }
 
-    // Always go to the PREVIOUS subtitle (one before current)
-    let targetTime = null;
-    if (currentSubIndex > 0) {
-      targetTime = startTimes[currentSubIndex - 1];
-      video.currentTime = targetTime;
-    } else if (currentSubIndex === 0) {
-      // Already at first subtitle — seek to its start
-      targetTime = startTimes[0];
-      video.currentTime = targetTime;
+    if (currentSubIndex <= 0) {
+      return false;
     }
 
-    // Resume playback if paused (e.g., after auto-pause)
-    if (video.paused) {
-      video.play();
-    }
+    return this.seekToSubtitleTarget(video, targets[currentSubIndex - 1]);
   },
 
   /**
@@ -127,85 +129,65 @@ const ControlActions = {
    */
   skipToNextSubtitle(subtitles = []) {
     const video = this.getVideoElement();
-    if (!video) return;
+    if (!video) return false;
 
     const currentTime = video.currentTime;
-    const startTimes = this.getNavigationStartTimes(video, subtitles);
+    const targets = this.getNavigationTargets(subtitles);
     const EPSILON = 0.001;
 
-    if (startTimes.length === 0) return;
+    if (targets.length === 0) return false;
 
     // Determine current subtitle by index first, then advance exactly one subtitle.
     let currentSubIndex = -1;
-    for (let i = startTimes.length - 1; i >= 0; i--) {
-      if (startTimes[i] <= currentTime + EPSILON) {
+    for (let i = targets.length - 1; i >= 0; i--) {
+      if (targets[i].startTime <= currentTime + EPSILON) {
         currentSubIndex = i;
         break;
       }
     }
 
-    let nextTime = null;
+    if (currentSubIndex >= targets.length - 1) {
+      return false;
+    }
+
     if (currentSubIndex < 0) {
-      nextTime = startTimes[0];
-    } else if (currentSubIndex < startTimes.length - 1) {
-      nextTime = startTimes[currentSubIndex + 1];
+      return this.seekToSubtitleTarget(video, targets[0]);
     }
 
-    if (nextTime !== null) {
-      video.currentTime = nextTime;
-    }
-
-    // Resume playback if paused (e.g., after auto-pause)
-    if (video.paused) {
-      video.play();
-    }
+    return this.seekToSubtitleTarget(video, targets[currentSubIndex + 1]);
   },
 
   /**
-   * Repeat the current subtitle - seeks to its start time
-   * Auto-pause at end is handled by the video's seeked event listener
-   * @param {Array<{startTime: number, endTime: number, text: string}>} subtitles - Array of subtitles with timing
+   * Repeat the current subtitle - seeks to its start time.
+   * @param {Array<{startTime: number, endTime?: number|null, text?: string}>} subtitles
    */
-  repeatCurrentSubtitle(subtitles) {
+  repeatCurrentSubtitle(subtitles = []) {
     const video = this.getVideoElement();
-    if (!video) {
-      console.warn('[Repeat] no video element');
-      return;
-    }
-    if (!subtitles || subtitles.length === 0) {
-      console.warn('[Repeat] subtitles empty');
-      return;
-    }
+    if (!video) return false;
+
+    const targets = this.getNavigationTargets(subtitles);
+    if (targets.length === 0) return false;
 
     const currentTime = video.currentTime;
 
     // Find current subtitle (the one we're in or the most recent one)
     let currentSubIndex = -1;
-    for (let i = 0; i < subtitles.length; i++) {
-      const sub = subtitles[i];
-      if (currentTime >= sub.startTime && currentTime <= sub.endTime) {
+    for (let i = 0; i < targets.length; i++) {
+      const target = targets[i];
+      if (typeof target.endTime === 'number' &&
+        currentTime >= target.startTime && currentTime <= target.endTime) {
         currentSubIndex = i;
         break;
-      } else if (currentTime > sub.endTime) {
+      } else if (currentTime >= target.startTime) {
         currentSubIndex = i; // Keep track of last passed subtitle
       }
     }
 
     if (currentSubIndex === -1) {
-      video.currentTime = subtitles[0].startTime;
-      if (video.paused) {
-        video.play();
-      }
-      return;
+      return this.seekToSubtitleTarget(video, targets[0]);
     }
 
-    const currentSub = subtitles[currentSubIndex];
-    video.currentTime = currentSub.startTime;
-
-    // Resume playback if paused (e.g., after auto-pause)
-    if (video.paused) {
-      video.play();
-    }
+    return this.seekToSubtitleTarget(video, targets[currentSubIndex]);
   },
 
   /**

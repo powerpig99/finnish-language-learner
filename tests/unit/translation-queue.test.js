@@ -28,12 +28,19 @@ function buildTranslationQueueHarness() {
     const setSubtitlesCalls = [];
     const saveCalls = [];
     const indicatorStats = { showCount: 0, hideCount: 0, updateCount: 0 };
+    const consoleStats = { error: [], warn: [], info: [] };
     const context = {
         console: {
             ...console,
-            error: () => {},
-            warn: () => {},
-            info: () => {},
+            error: (...args) => {
+                consoleStats.error.push(args);
+            },
+            warn: (...args) => {
+                consoleStats.warn.push(args);
+            },
+            info: (...args) => {
+                consoleStats.info.push(args);
+            },
         },
         Date,
         Map,
@@ -92,6 +99,7 @@ function buildTranslationQueueHarness() {
         setSubtitlesCalls,
         indicatorStats,
         saveCalls,
+        consoleStats,
     };
 }
 
@@ -291,6 +299,83 @@ describe('translation queue non-translatable subtitle handling', () => {
         context.clearSubtitleTranslationState();
         const movedAfterReset = context.enqueueTranslation('Hei maailma');
         assert.equal(movedAfterReset, true);
+    });
+
+    test('handleBatchTranslation retries empty subtitle responses within the same batch run', async () => {
+        const { context, dispatchedEvents } = buildTranslationQueueHarness();
+        let fetchCallCount = 0;
+
+        context.fetchBatchTranslation = async (texts) => {
+            fetchCallCount += 1;
+            if (fetchCallCount === 1) {
+                return [true, [null]];
+            }
+            return [true, texts.map((text) => `translated:${text}`)];
+        };
+
+        await context.handleBatchTranslation([
+            { text: 'ensimmäinen', startTime: 1, endTime: 2 },
+        ]);
+
+        const entry = context.subtitleState.get(toTranslationKey('ensimmäinen'));
+        assert.equal(fetchCallCount, 2);
+        assert.equal(entry?.status, 'success');
+        assert.equal(entry?.text, 'translated:ensimmäinen');
+        assert.equal(dispatchedEvents.length, 1);
+    });
+
+    test('handleBatchTranslation retries echoed original subtitle responses within the same batch run', async () => {
+        const { context, dispatchedEvents } = buildTranslationQueueHarness();
+        let fetchCallCount = 0;
+        context.detectedSourceLanguage = 'fi';
+        context.targetLanguage = 'EN-US';
+
+        context.fetchBatchTranslation = async (texts) => {
+            fetchCallCount += 1;
+            if (fetchCallCount === 1) {
+                return [true, texts];
+            }
+            return [true, ['hello world']];
+        };
+
+        await context.handleBatchTranslation([
+            { text: 'Hei maailma', startTime: 1, endTime: 2 },
+        ]);
+
+        const entry = context.subtitleState.get(toTranslationKey('Hei maailma'));
+        assert.equal(fetchCallCount, 2);
+        assert.equal(entry?.status, 'success');
+        assert.equal(entry?.text, 'hello world');
+        assert.equal(dispatchedEvents.length, 1);
+    });
+
+    test('handleBatchTranslation marks subtitle as failed only after batch retry limit is exhausted', async () => {
+        const { context, dispatchedEvents, consoleStats } = buildTranslationQueueHarness();
+        let fetchCallCount = 0;
+        context.getCurrentTranslationProvider = () => 'gemini';
+        context.detectedSourceLanguage = 'fi';
+        context.targetLanguage = 'EN-US';
+
+        context.fetchBatchTranslation = async (texts) => {
+            fetchCallCount += 1;
+            return [true, texts];
+        };
+
+        await context.handleBatchTranslation([
+            { text: 'Hei maailma', startTime: 1, endTime: 2 },
+        ]);
+
+        const entry = context.subtitleState.get(toTranslationKey('Hei maailma'));
+        assert.equal(fetchCallCount, 4);
+        assert.equal(entry?.status, 'failed');
+        assert.match(entry?.error || '', /batch retry limit reached/);
+        assert.equal(dispatchedEvents.length, 1);
+        assert.equal(consoleStats.error.length, 1);
+        assert.match(consoleStats.error[0][0], /Subtitle translation failed/);
+        assert.equal(consoleStats.error[0][1]?.provider, 'gemini');
+        assert.equal(consoleStats.error[0][1]?.failureType, 'echo_back_failure');
+        assert.deepEqual(Array.from(consoleStats.error[0][1]?.subtitles || []), ['Hei maailma']);
+        assert.deepEqual(Array.from(consoleStats.error[0][1]?.providerResponses || []), ['Hei maailma']);
     });
 
     test('handleBatchTranslation updates navigation timing during in-flight batch and processes queued subtitles', async () => {

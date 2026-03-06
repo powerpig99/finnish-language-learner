@@ -8,7 +8,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { describe, test } = require('node:test');
 
-function buildControlActionsHarness(video) {
+function buildControlActionsHarness(video, { primeAutoPauseNavigationTarget = null } = {}) {
     const context = {
         window: {},
         document: {
@@ -20,6 +20,9 @@ function buildControlActionsHarness(video) {
             },
         },
     };
+    if (typeof primeAutoPauseNavigationTarget === 'function') {
+        context.primeAutoPauseNavigationTarget = primeAutoPauseNavigationTarget;
+    }
 
     const scriptPath = path.resolve(__dirname, '../../controls/control-actions.js');
     const scriptSource = fs.readFileSync(scriptPath, 'utf8');
@@ -59,6 +62,29 @@ describe('ControlActions subtitle navigation', () => {
         assert.equal(video.currentTime, 35);
     });
 
+    test('skipToNextSubtitle primes auto-pause with the target subtitle end time', () => {
+        const primedEndTimes = [];
+        const video = makeVideo({
+            currentTime: 11,
+            paused: true,
+            textTracks: [],
+        });
+        const controlActions = buildControlActionsHarness(video, {
+            primeAutoPauseNavigationTarget: (endTime) => {
+                primedEndTimes.push(endTime);
+            },
+        });
+
+        controlActions.skipToNextSubtitle([
+            { startTime: 2, endTime: 3, text: 'one' },
+            { startTime: 35, endTime: 37, text: 'two' },
+        ]);
+
+        assert.deepEqual(primedEndTimes, [37]);
+        assert.equal(video.currentTime, 35);
+        assert.equal(video.playCalls, 1);
+    });
+
     test('skipToPreviousSubtitle uses prefetched subtitle timing', () => {
         const video = makeVideo({
             currentTime: 36,
@@ -75,7 +101,8 @@ describe('ControlActions subtitle navigation', () => {
         assert.equal(video.currentTime, 2);
     });
 
-    test('skipToNextSubtitle falls back to active text-track cues when prefetched timings are unavailable', () => {
+    test('skipToNextSubtitle ignores the request when prefetched timings are unavailable', () => {
+        const primedEndTimes = [];
         const video = makeVideo({
             currentTime: 10,
             textTracks: [
@@ -85,14 +112,19 @@ describe('ControlActions subtitle navigation', () => {
                 },
             ],
         });
-        const controlActions = buildControlActionsHarness(video);
+        const controlActions = buildControlActionsHarness(video, {
+            primeAutoPauseNavigationTarget: (endTime) => {
+                primedEndTimes.push(endTime);
+            },
+        });
 
         controlActions.skipToNextSubtitle([]);
 
-        assert.equal(video.currentTime, 12);
+        assert.equal(video.currentTime, 10);
+        assert.deepEqual(primedEndTimes, []);
     });
 
-    test('prefetched timings stay authoritative and ignore active cue micro-splits', () => {
+    test('prefetched timings stay authoritative and ignore text-track cue timing', () => {
         const video = makeVideo({
             currentTime: 35.1,
             textTracks: [
@@ -117,6 +149,30 @@ describe('ControlActions subtitle navigation', () => {
         assert.equal(video.currentTime, 50);
     });
 
+    test('skipToPreviousSubtitle is a no-op on the first subtitle', () => {
+        const primedEndTimes = [];
+        const video = makeVideo({
+            currentTime: 2.1,
+            paused: true,
+            textTracks: [],
+        });
+        const controlActions = buildControlActionsHarness(video, {
+            primeAutoPauseNavigationTarget: (endTime) => {
+                primedEndTimes.push(endTime);
+            },
+        });
+
+        const didSeek = controlActions.skipToPreviousSubtitle([
+            { startTime: 2, endTime: 3, text: 'one' },
+            { startTime: 35, endTime: 37, text: 'two' },
+        ]);
+
+        assert.equal(didSeek, false);
+        assert.equal(video.currentTime, 2.1);
+        assert.equal(video.playCalls, 0);
+        assert.deepEqual(primedEndTimes, []);
+    });
+
     test('skipToNextSubtitle deduplicates near-identical prefetched start times', () => {
         const video = makeVideo({
             currentTime: 4,
@@ -131,5 +187,54 @@ describe('ControlActions subtitle navigation', () => {
         ]);
 
         assert.equal(video.currentTime, 5.0);
+    });
+
+    test('skipToNextSubtitle is a no-op on the last subtitle', () => {
+        const primedEndTimes = [];
+        const video = makeVideo({
+            currentTime: 50.5,
+            paused: true,
+            textTracks: [],
+        });
+        const controlActions = buildControlActionsHarness(video, {
+            primeAutoPauseNavigationTarget: (endTime) => {
+                primedEndTimes.push(endTime);
+            },
+        });
+
+        const didSeek = controlActions.skipToNextSubtitle([
+            { startTime: 2, endTime: 3, text: 'one' },
+            { startTime: 35, endTime: 37, text: 'two' },
+            { startTime: 50, endTime: 52, text: 'three' },
+        ]);
+
+        assert.equal(didSeek, false);
+        assert.equal(video.currentTime, 50.5);
+        assert.equal(video.playCalls, 0);
+        assert.deepEqual(primedEndTimes, []);
+    });
+
+    test('repeatCurrentSubtitle primes auto-pause with the repeated subtitle end time', () => {
+        const primedEndTimes = [];
+        const video = makeVideo({
+            currentTime: 35.2,
+            paused: true,
+            textTracks: [],
+        });
+        const controlActions = buildControlActionsHarness(video, {
+            primeAutoPauseNavigationTarget: (endTime) => {
+                primedEndTimes.push(endTime);
+            },
+        });
+
+        controlActions.repeatCurrentSubtitle([
+            { startTime: 2, endTime: 3, text: 'one' },
+            { startTime: 35, endTime: 37, text: 'two' },
+            { startTime: 50, endTime: 52, text: 'three' },
+        ]);
+
+        assert.deepEqual(primedEndTimes, [37]);
+        assert.equal(video.currentTime, 35);
+        assert.equal(video.playCalls, 1);
     });
 });

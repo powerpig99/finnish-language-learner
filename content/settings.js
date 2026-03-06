@@ -163,13 +163,7 @@ function setupVideoSpeedControl() {
         video.addEventListener('loadedmetadata', applyPlaybackSpeed);
         video.addEventListener('play', applyPlaybackSpeed, { once: true });
         // Auto-pause event listeners
-        // On seek (skip/repeat), clear stale endTime and schedule auto-pause for the new subtitle
-        video.addEventListener('seeked', () => {
-            _currentSubtitleEndTime = null; // Clear stale value, force fresh lookup
-            if (autoPauseEnabled && extensionEnabled) {
-                scheduleAutoPause();
-            }
-        });
+        video.addEventListener('seeked', handleVideoSeekedForAutoPause);
         // On play (resume after pause), schedule auto-pause for remaining time
         video.addEventListener('play', () => {
             if (autoPauseEnabled && extensionEnabled) {
@@ -188,6 +182,9 @@ function setupVideoSpeedControl() {
         });
         // "New video" on source swap: same element, new src during SPA navigation.
         video.addEventListener('loadstart', () => {
+            primeAutoPauseNavigationTarget(null);
+            setCurrentSubtitleEndTime(null);
+            clearAutoPause();
             if (typeof resetNavigationSubtitleTimeline === 'function') {
                 resetNavigationSubtitleTimeline();
             }
@@ -277,10 +274,11 @@ let _autoPauseTimeout = null;
 let _autoPauseLookupRetryCount = 0;
 const AUTO_PAUSE_LOOKUP_RETRY_LIMIT = 3;
 const AUTO_PAUSE_LOOKUP_RETRY_DELAY_MS = 120;
-// Current subtitle endTime, set by subtitle-dom.js when a subtitle is displayed.
-// This is the source of truth for auto-pause — avoids time-based lookup issues
-// where DOM mutation fires ~20-30ms before VTT startTime.
+// Current rendered subtitle endTime, set by subtitle-dom.js when a subtitle is displayed.
 let _currentSubtitleEndTime = null;
+// Explicit subtitle navigation primes the exact target endTime before seeking so
+// auto-pause does not depend on buffered cue availability after the seek.
+let _queuedNavigationSubtitleEndTime = null;
 /**
  * Set the current subtitle's endTime for auto-pause scheduling.
  * Called from subtitle-dom.js when a subtitle is displayed and matched against fullSubtitles.
@@ -290,6 +288,21 @@ function setCurrentSubtitleEndTime(endTime) {
     _currentSubtitleEndTime = endTime;
     if (endTime !== null) {
         _autoPauseLookupRetryCount = 0;
+    }
+}
+function primeAutoPauseNavigationTarget(endTime) {
+    _queuedNavigationSubtitleEndTime = typeof endTime === 'number' && Number.isFinite(endTime)
+        ? endTime
+        : null;
+    if (_queuedNavigationSubtitleEndTime !== null) {
+        _autoPauseLookupRetryCount = 0;
+    }
+}
+function handleVideoSeekedForAutoPause() {
+    _currentSubtitleEndTime = _queuedNavigationSubtitleEndTime;
+    _queuedNavigationSubtitleEndTime = null;
+    if (autoPauseEnabled && extensionEnabled) {
+        scheduleAutoPause();
     }
 }
 function getActiveCueEndTime(video) {
@@ -329,9 +342,8 @@ function scheduleAutoPauseLookupRetry() {
 }
 /**
  * Schedule auto-pause at the end of the current subtitle.
- * Uses _currentSubtitleEndTime (set by subtitle DOM mutation via text matching)
- * instead of looking up by video.currentTime, which is unreliable because
- * DOM mutation fires ~20-30ms before VTT startTime.
+ * Prefers explicit navigation timing when present, otherwise uses the current
+ * displayed subtitle timing and finally falls back to active native cues.
  *
  * Called from: subtitle DOM mutation, video seeked/play/ratechange events.
  */
@@ -348,9 +360,10 @@ function scheduleAutoPause(fromRetry = false) {
     if (!video || video.paused) {
         return;
     }
-    // For DOM mutation calls, _currentSubtitleEndTime is already set.
-    // For seeked/play/ratechange events, we need to look up by currentTime.
-    let endTime = _currentSubtitleEndTime;
+    let endTime = _queuedNavigationSubtitleEndTime;
+    if (endTime === null) {
+        endTime = _currentSubtitleEndTime;
+    }
     // Check if stored endTime is stale (already passed) — if so, fall through to lookup
     if (endTime !== null) {
         const pauseAt = endTime - 0.05;

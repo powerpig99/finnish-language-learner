@@ -46,7 +46,7 @@ async function sendTranslationMessageWithRetry(action, data, errorContext) {
 async function fetchBatchTranslation(texts) {
     return sendTranslationMessageWithRetry(
         'fetchBatchTranslation',
-        { texts, targetLanguage, isContextual: true, sourceLanguage: detectedSourceLanguage },
+        { texts, targetLanguage, isContextual: true },
         'batch translation request'
     );
 }

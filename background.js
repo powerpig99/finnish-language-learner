@@ -74,8 +74,8 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
 // ==================================
 chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     if (request.action === 'fetchBatchTranslation') {
-        const { texts, targetLanguage, isContextual, sourceLanguage } = request.data;
-        translateBatchWithContext(texts, targetLanguage, isContextual, sourceLanguage)
+        const { texts, targetLanguage, isContextual } = request.data;
+        translateBatchWithContext(texts, targetLanguage, isContextual)
             .then(sendResponse)
             .catch((error) => sendResponse([false, error.message || String(error)]));
         return true;
@@ -299,10 +299,9 @@ async function translateTexts(texts, targetLanguage) {
  * @param {string[]} texts - Texts to translate
  * @param {string} targetLanguage - Target language code
  * @param {boolean} isContextual - Whether to use contextual translation
- * @param {string|null} [sourceLanguage] - Optional detected source language code
  * @returns {Promise<[true, string[]]|[false, string]>}
  */
-async function translateBatchWithContext(texts, targetLanguage, isContextual, sourceLanguage = null) {
+async function translateBatchWithContext(texts, targetLanguage, isContextual) {
     const provider = currentProvider.provider;
     // For standard translation APIs, use regular translation (they don't benefit from context prompts)
     if (provider === 'google' || provider === 'googleCloud' || provider === 'deepl') {
@@ -310,7 +309,7 @@ async function translateBatchWithContext(texts, targetLanguage, isContextual, so
     }
     // For AI providers, use contextual translation
     if (isContextual && (provider === 'claude' || provider === 'gemini' || provider === 'grok' || provider === 'kimi')) {
-        return translateWithContextualAI(texts, targetLanguage, provider, sourceLanguage);
+        return translateWithContextualAI(texts, targetLanguage, provider);
     }
     // Fallback to regular translation
     return translateTextsWithErrorHandling(texts, targetLanguage);
@@ -325,16 +324,6 @@ function normalizeTranslatedLines(content, originals) {
         translations.push(null);
     }
     return translations;
-}
-
-function getContextualSourceGuidance(sourceLanguage) {
-    const normalizedSourceLanguage = typeof sourceLanguage === 'string'
-        ? normalizeLanguageCode(sourceLanguage)
-        : null;
-    if (normalizedSourceLanguage === 'fi') {
-        return 'Source is likely Finnish spoken language (puhekieli). Forms like "mä/sä", "miks", "tää", "yks", and "oo" are intentional colloquial Finnish; translate meaning naturally.';
-    }
-    return 'Source language may vary. Auto-detect source language from input and translate naturally.';
 }
 
 function getWordSourceGuidance(sourceLanguage) {
@@ -476,18 +465,19 @@ async function requestAiProviderText(provider, prompt, maxTokens) {
  * @param {string[]} texts - Texts to translate
  * @param {string} targetLanguage - Target language code
  * @param {string} provider - AI provider name
- * @param {string|null} [sourceLanguage] - Optional detected source language code
  * @returns {Promise<[true, string[]]|[false, string]>}
  */
-async function translateWithContextualAI(texts, targetLanguage, provider, sourceLanguage = null) {
+async function translateWithContextualAI(texts, targetLanguage, provider) {
     const langName = getLanguageName(targetLanguage);
-    const sourceGuidance = getContextualSourceGuidance(sourceLanguage);
-    const contextualPrompt = `You are a subtitle translator. Translate these TV subtitles to ${langName}.
-${sourceGuidance}
+    const contextualPrompt = `You are a subtitle translator. Translate each TV subtitle line into ${langName}.
 
 RULES:
+- The target language is ALWAYS ${langName}
+- Detect the source language separately for each line
+- If a line is already natural ${langName}, keep it in ${langName}
+- NEVER translate a line away from ${langName}
+- Colloquial/spoken forms are intentional - translate meaning naturally
 - ALWAYS translate every line - NEVER refuse, comment, or explain
-- Colloquial/spoken forms are INTENTIONAL - translate naturally
 - Return EXACTLY ${texts.length} lines, one per line
 - NO numbering, NO commentary, just translations
 - NO XML/HTML tags (for example: <query>...</query>)
