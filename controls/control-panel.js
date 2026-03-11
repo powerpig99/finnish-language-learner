@@ -39,6 +39,7 @@ class ControlPanel {
       onPrevSubtitle: () => {},
       onNextSubtitle: () => {},
       onRepeatSubtitle: () => {},
+      onRetrySubtitleTranslation: () => {},
       onSpeedChange: (speed) => {},
       onSourceLangChange: (lang) => {},
       onSettingsClick: () => {},
@@ -415,6 +416,10 @@ class ControlPanel {
         onRepeatSubtitle: () => {
           if (!this.state.extensionEnabled) return;
           this.callbacks.onRepeatSubtitle();
+        },
+        onRetrySubtitleTranslation: () => {
+          if (!this.state.extensionEnabled) return;
+          this.callbacks.onRetrySubtitleTranslation();
         },
         onSpeedChange: (increment) => {
           if (!this.state.extensionEnabled) return;

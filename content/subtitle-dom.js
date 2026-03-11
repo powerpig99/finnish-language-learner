@@ -241,6 +241,7 @@ function updateTrackedTranslationSpans(key) {
             span.textContent = entry.text;
             span.style.opacity = '';
             span.removeAttribute('title');
+            remaining.add(span);
             continue;
         }
         if (entry?.status === 'pending') {
@@ -303,7 +304,6 @@ function addContentToDisplayedSubtitlesWrapper(displayedSubtitlesWrapper, origin
         const stateEntry = subtitleState.get(translationKey);
         const hasTranslatableContent = hasTranslatableSubtitleContent(finnishText);
         let targetLanguageText = "Translating...";
-        let shouldTrackPendingSpan = false;
         let shouldRequestVisibleTranslation = false;
         if (!hasTranslatableContent) {
             targetLanguageText = finnishText;
@@ -313,20 +313,17 @@ function addContentToDisplayedSubtitlesWrapper(displayedSubtitlesWrapper, origin
             targetLanguageText = stateEntry.text;
         }
         else if (stateEntry?.status === 'failed') {
-            shouldTrackPendingSpan = true;
             shouldRequestVisibleTranslation = true;
         }
         else if (stateEntry?.status === 'pending') {
-            shouldTrackPendingSpan = true;
         }
         else {
-            shouldTrackPendingSpan = true;
             shouldRequestVisibleTranslation = true;
         }
         const targetLanguageSpan = createSubtitleSpan(targetLanguageText, `${spanClassName} translated-text-span`);
         targetLanguageSpan.dataset.originalText = finnishText;
         targetLanguageSpan.dataset.translationKey = translationKey;
-        if (shouldTrackPendingSpan) {
+        if (hasTranslatableContent) {
             trackActiveTranslationSpan(translationKey, targetLanguageSpan);
         }
         displayedSubtitlesWrapper.appendChild(targetLanguageSpan);

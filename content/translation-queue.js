@@ -10,10 +10,117 @@ function hasTranslatableSubtitleContent(normalizedSubtitleText) {
     return /\p{L}/u.test(normalizedSubtitleText);
 }
 
-function shouldLogTranslationFailureAsWarning(errorMessage) {
-    const normalizedError = String(errorMessage || '').toLowerCase();
-    if (!normalizedError) {
+const SUBTITLE_LANGUAGE_HINT_WORDS = {
+    fi: new Set([
+        'minä', 'sinä', 'hän', 'me', 'te', 'he', 'on', 'ovat', 'oli', 'olisi', 'olla', 'ja', 'tai', 'mutta',
+        'että', 'kun', 'jos', 'niin', 'kuin', 'mitä', 'mikä', 'missä', 'miksi', 'koska', 'kanssa', 'joka',
+        'jotka', 'myös', 'vain', 'sitten', 'nyt', 'tässä', 'täällä', 'siellä', 'tuolla', 'tänne', 'sinne',
+        'tänään', 'huomenna', 'eilen', 'aina', 'koskaan', 'joskus', 'ehkä', 'pitää', 'täytyy', 'voida',
+        'haluta', 'tietää', 'nähdä', 'kuulla', 'sanoa', 'mennä', 'tulla', 'ottaa', 'antaa', 'hei', 'maailma',
+    ]),
+    sv: new Set([
+        'jag', 'du', 'han', 'hon', 'den', 'det', 'vi', 'ni', 'de', 'är', 'var', 'vara', 'har', 'hade', 'och',
+        'eller', 'men', 'att', 'när', 'om', 'så', 'som', 'vad', 'vilken', 'varför', 'för', 'med', 'på', 'av',
+        'till', 'från', 'också', 'bara', 'sedan', 'nu', 'här', 'där', 'dit', 'idag', 'imorgon', 'igår',
+        'alltid', 'aldrig', 'ibland', 'kanske', 'måste', 'kan', 'vill', 'vet', 'ser', 'hör', 'säger', 'går',
+        'kommer', 'tar', 'ger',
+    ]),
+    en: new Set([
+        'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do',
+        'does', 'did', 'will', 'would', 'could', 'should', 'can', 'may', 'might', 'must', 'shall', 'and',
+        'or', 'but', 'if', 'then', 'else', 'when', 'where', 'why', 'how', 'what', 'which', 'who', 'this',
+        'that', 'these', 'those', 'here', 'there', 'now', 'just', 'only', 'also', 'very', 'really', 'always',
+        'never', 'sometimes', 'maybe', 'want', 'need', 'know', 'think', 'see', 'hear', 'say', 'go', 'come',
+        'take', 'give', 'get', 'make', 'let', 'put', 'use', 'find', 'tell', 'hello', 'yeah', 'okay', 'ok',
+        'i', 'you', 'we', 'they', 'my', 'your', 'our', 'their', 'with', 'from', 'got',
+    ]),
+    de: new Set([
+        'ich', 'du', 'er', 'sie', 'es', 'wir', 'ihr', 'ist', 'sind', 'war', 'waren', 'sein', 'haben', 'hat',
+        'hatte', 'und', 'oder', 'aber', 'wenn', 'dann', 'weil', 'dass', 'als', 'wie', 'was', 'wer', 'wo',
+        'warum', 'für', 'mit', 'auf', 'von', 'zu', 'aus', 'auch', 'nur', 'noch', 'schon', 'jetzt', 'hier',
+        'dort', 'heute', 'morgen', 'gestern', 'immer', 'nie', 'manchmal', 'vielleicht', 'müssen', 'können',
+        'wollen', 'wissen', 'sehen', 'hören', 'sagen', 'gehen', 'kommen', 'nehmen', 'geben',
+    ]),
+    fr: new Set([
+        'je', 'tu', 'il', 'elle', 'nous', 'vous', 'ils', 'elles', 'est', 'sont', 'était', 'étaient', 'être',
+        'avoir', 'a', 'ont', 'avait', 'et', 'ou', 'mais', 'si', 'alors', 'parce', 'que', 'quand', 'où',
+        'pourquoi', 'comment', 'qui', 'quoi', 'ce', 'cette', 'ces', 'ici', 'là', 'maintenant', 'seulement',
+        'aussi', 'très', 'vraiment', 'toujours', 'jamais', 'parfois', 'peut', 'être', 'vouloir', 'devoir',
+        'pouvoir', 'savoir', 'voir', 'entendre', 'dire', 'aller', 'venir', 'prendre', 'donner',
+    ]),
+};
+
+const SUBTITLE_LANGUAGE_HINT_CHARS = {
+    fi: /[äö]/gu,
+    sv: /[å]/gu,
+    de: /[üßäö]/gu,
+    fr: /[éèêëàâäùûüïîôœç]/gu,
+};
+
+function detectLikelySubtitleLineLanguage(rawSubtitleText) {
+    const normalizedSubtitleText = normalizeSubtitleText(rawSubtitleText).toLowerCase();
+    if (!normalizedSubtitleText || !hasTranslatableSubtitleContent(normalizedSubtitleText)) {
+        return null;
+    }
+    const words = normalizedSubtitleText.match(/\p{L}+/gu) || [];
+    let bestLanguage = null;
+    let bestScore = 0;
+    let secondBestScore = 0;
+
+    for (const [languageCode, languageWords] of Object.entries(SUBTITLE_LANGUAGE_HINT_WORDS)) {
+        let score = 0;
+        for (const word of words) {
+            if (languageWords.has(word)) {
+                score += 1;
+            }
+        }
+        const charPattern = SUBTITLE_LANGUAGE_HINT_CHARS[languageCode];
+        if (charPattern) {
+            score += (normalizedSubtitleText.match(charPattern) || []).length * 2;
+        }
+        if (score > bestScore) {
+            secondBestScore = bestScore;
+            bestScore = score;
+            bestLanguage = languageCode;
+        } else if (score > secondBestScore) {
+            secondBestScore = score;
+        }
+    }
+
+    if (!bestLanguage || bestScore < 2 || bestScore === secondBestScore) {
+        return null;
+    }
+    return bestLanguage;
+}
+
+function shouldRejectIdenticalTranslation(originalText) {
+    if (isSourceAndTargetSameLanguage()) {
         return false;
+    }
+    const lineLanguage = detectLikelySubtitleLineLanguage(originalText);
+    if (!lineLanguage) {
+        return false;
+    }
+    return lineLanguage !== normalizeLanguageCode(targetLanguage);
+}
+
+function isModelResponseValidationFailureType(failureType) {
+    const normalizedFailureType = String(failureType || '').toLowerCase();
+    return normalizedFailureType === 'echo_back_failure' ||
+        normalizedFailureType === 'language_label_failure' ||
+        normalizedFailureType === 'empty_failure';
+}
+
+function shouldLogTranslationFailureAsWarning(failureTypeOrErrorMessage, maybeErrorMessage = null) {
+    const normalizedFailureType = maybeErrorMessage === null
+        ? ''
+        : String(failureTypeOrErrorMessage || '').toLowerCase();
+    const normalizedError = String(maybeErrorMessage === null ? failureTypeOrErrorMessage : maybeErrorMessage || '').toLowerCase();
+    if (!normalizedError) {
+        return isModelResponseValidationFailureType(normalizedFailureType);
+    }
+    if (isModelResponseValidationFailureType(normalizedFailureType)) {
+        return true;
     }
     return normalizedError.includes('api key') ||
         normalizedError.includes('rate limit') ||
@@ -225,7 +332,7 @@ function classifySubtitleTranslationResult(rawSubtitleText, translatedText, expe
     }
     const isDirectEchoBack = toTranslationKey(normalizedTranslatedText) === toTranslationKey(normalizedOriginalText);
     const isWrappedEchoBack = isLikelyWrappedEchoBackTranslation(normalizedOriginalText, normalizedTranslatedText);
-    if (!isSourceAndTargetSameLanguage() && (isDirectEchoBack || isWrappedEchoBack)) {
+    if ((isDirectEchoBack || isWrappedEchoBack) && shouldRejectIdenticalTranslation(normalizedOriginalText)) {
         return {
             status: 'echo_back_failure',
             key,
@@ -289,7 +396,10 @@ function enqueueTranslation(rawSubtitleText, generation = getCurrentTranslationS
     const currentEntry = subtitleState.get(key);
     const now = Date.now();
     const isSameGeneration = typeof currentEntry?.generation !== 'number' || currentEntry.generation === generation;
-    if ((currentEntry?.status === 'pending' && isSameGeneration) || currentEntry?.status === 'success') {
+    if (currentEntry?.status === 'pending' && isSameGeneration) {
+        return false;
+    }
+    if (currentEntry?.status === 'success' && !forceRetry) {
         return false;
     }
     if (currentEntry?.status === 'failed' &&
@@ -462,7 +572,9 @@ function buildSubtitleTranslationFailureSummary(payload) {
         ? payload.providerResponses.slice(0, 3)
         : payload.providerResponses;
     const summaryParts = [
-        'YleDualSubExtension: Subtitle translation failed',
+        isModelResponseValidationFailureType(payload.failureType)
+            ? 'YleDualSubExtension: Subtitle translation rejected'
+            : 'YleDualSubExtension: Subtitle translation failed',
         `provider=${payload.provider || 'unknown'}`,
         `failureType=${payload.failureType || 'unknown'}`,
         `targetLanguage=${payload.targetLanguage || 'unknown'}`,
@@ -495,7 +607,7 @@ function logSubtitleTranslationFailure({
         subtitles: Array.isArray(subtitles) ? subtitles.slice() : [],
         providerResponses: Array.isArray(providerResponses) ? providerResponses.slice() : providerResponses,
     };
-    const logFailure = shouldLogTranslationFailureAsWarning(errorMessage)
+    const logFailure = shouldLogTranslationFailureAsWarning(failureType, errorMessage)
         ? console.warn
         : console.error;
     logFailure(buildSubtitleTranslationFailureSummary(payload), payload);
@@ -717,6 +829,23 @@ async function requestVisibleSubtitleTranslation(rawSubtitleText) {
     return true;
 }
 
+async function requestManualSubtitleRetranslation(rawSubtitleText) {
+    const normalizedText = normalizeSubtitleText(rawSubtitleText);
+    if (!normalizedText || !hasTranslatableSubtitleContent(normalizedText)) {
+        return false;
+    }
+    const key = toTranslationKey(normalizedText);
+    if (subtitleState.get(key)?.status === 'pending') {
+        return false;
+    }
+    clearEchoBackRetryState(key);
+    await handleBatchTranslation([{ text: normalizedText }], {
+        forceRetry: true,
+        suppressIndicator: true,
+    });
+    return true;
+}
+
 async function retryFailedSubtitleTranslation(rawSubtitleText) {
     const normalizedText = normalizeSubtitleText(rawSubtitleText);
     if (!normalizedText) {
@@ -727,5 +856,5 @@ async function retryFailedSubtitleTranslation(rawSubtitleText) {
     if (currentEntry?.status !== 'failed') {
         return false;
     }
-    return requestVisibleSubtitleTranslation(normalizedText);
+    return requestManualSubtitleRetranslation(normalizedText);
 }

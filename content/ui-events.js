@@ -229,13 +229,13 @@ document.addEventListener('dscSourceLangChange', () => {
     // Clear translations when language changes
     clearSubtitleTranslationState();
 });
-document.addEventListener('dscRepeatSubtitle', (e) => {
+document.addEventListener('dscRetrySubtitleTranslation', (e) => {
     const subtitleText = e?.detail?.subtitleText;
-    if (typeof requestVisibleSubtitleTranslation !== 'function') {
+    if (typeof requestManualSubtitleRetranslation !== 'function') {
         return;
     }
-    requestVisibleSubtitleTranslation(subtitleText).catch((error) => {
-        console.error('YleDualSubExtension: Error retrying failed subtitle translation:', error);
+    requestManualSubtitleRetranslation(subtitleText).catch((error) => {
+        console.error('YleDualSubExtension: Error forcing subtitle re-translation:', error);
     });
 });
 // Handle target language changes without reloading the YLE page.

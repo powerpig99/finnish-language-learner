@@ -97,4 +97,35 @@ describe('tracked subtitle DOM state transitions', () => {
         assert.equal(span.title, '');
         assert.equal(context.__api.getTrackedCount(key), 1);
     });
+
+    test('successful spans stay tracked and forced retries show translating', () => {
+        const context = buildSubtitleDomHarness();
+        const key = 'hei maailma';
+        const span = makeSpan('Hei maailma');
+
+        context.__api.trackActiveTranslationSpan(key, span);
+        context.subtitleState.set(key, {
+            status: 'success',
+            text: 'Hello world',
+        });
+        context.__api.updateTrackedTranslationSpans(key);
+
+        assert.equal(span.textContent, 'Hello world');
+        assert.equal(span.style.opacity, '');
+        assert.equal(span.title, '');
+        assert.equal(context.__api.getTrackedCount(key), 1);
+
+        context.subtitleState.set(key, {
+            status: 'pending',
+        });
+        context.document.dispatchEvent({
+            type: 'dscTranslationStateChanged',
+            detail: { key },
+        });
+
+        assert.equal(span.textContent, 'Translating...');
+        assert.equal(span.style.opacity, '');
+        assert.equal(span.title, '');
+        assert.equal(context.__api.getTrackedCount(key), 1);
+    });
 });

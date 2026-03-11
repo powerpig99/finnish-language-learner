@@ -31,8 +31,22 @@ class ControlKeyboard {
       'D': 'toggleDualSub',
       ',': 'previousSubtitle',
       '.': 'nextSubtitle',
-      'r': 'repeatSubtitle',
-      'R': 'repeatSubtitle',
+      'i': 'previousSubtitle',
+      'I': 'previousSubtitle',
+      'g': 'nextSubtitle',
+      'G': 'nextSubtitle',
+      'h': 'repeatSubtitle',
+      'H': 'repeatSubtitle',
+      'c': 'retrySubtitleTranslation',
+      'C': 'retrySubtitleTranslation',
+      'j': 'togglePlayPause',
+      'J': 'togglePlayPause',
+      'k': 'decreaseSpeed',
+      'K': 'decreaseSpeed',
+      'm': 'increaseSpeed',
+      'M': 'increaseSpeed',
+      'o': 'toggleAutoPause',
+      'O': 'toggleAutoPause',
       'p': 'toggleAutoPause',
       'P': 'toggleAutoPause',
       '[': 'decreaseSpeed',
@@ -98,13 +112,22 @@ class ControlKeyboard {
    * @param {string} key
    * @returns {boolean}
    */
-  _shouldHandleKey(key) {
+  _getActionForEvent(event) {
+    if (event.code === 'KeyR') {
+      return event.shiftKey ? 'retrySubtitleTranslation' : 'repeatSubtitle';
+    }
+    return this.keyBindings[event.key] || null;
+  }
+
+  _shouldHandleKey(event) {
+    const action = this._getActionForEvent(event);
+
     // Check if key is in our bindings
-    if (!this.keyBindings[key]) return false;
+    if (!action) return false;
 
     // Check special keys
-    if (key === ' ' && !this.config.interceptSpace) return false;
-    if ((key === '[' || key === ']') && !this.config.interceptBrackets) return false;
+    if (event.key === ' ' && !this.config.interceptSpace) return false;
+    if ((event.key === '[' || event.key === ']') && !this.config.interceptBrackets) return false;
 
     return true;
   }
@@ -118,19 +141,19 @@ class ControlKeyboard {
     if (this._isInputElement(event)) return;
     if (event.ctrlKey || event.metaKey || event.altKey) return;
 
-    const key = event.key;
-    const allowsRepeat = key === '[' || key === ']';
+    const allowsRepeat = event.key === '[' || event.key === ']';
+    const guardKey = event.code || event.key;
 
     // Check if this is one of our hotkeys
-    if (!this._shouldHandleKey(key)) return;
+    if (!this._shouldHandleKey(event)) return;
 
     // Ignore key-repeat for one-shot actions (not speed brackets).
     if (event.repeat && !allowsRepeat) return;
 
     // Guard against duplicate keydown firing while a key is held.
-    if (!allowsRepeat && this._pressedKeys.has(key)) return;
+    if (!allowsRepeat && this._pressedKeys.has(guardKey)) return;
     if (!allowsRepeat) {
-      this._pressedKeys.add(key);
+      this._pressedKeys.add(guardKey);
     }
 
     // Prevent default and stop propagation for our keys
@@ -138,7 +161,7 @@ class ControlKeyboard {
     event.stopPropagation();
     event.stopImmediatePropagation();
 
-    const action = this.keyBindings[key];
+    const action = this._getActionForEvent(event);
     this._executeAction(action, event);
   }
 
@@ -150,10 +173,10 @@ class ControlKeyboard {
     if (!this.config.enabled) return;
     if (this._isInputElement(event)) return;
 
-    const key = event.key;
-    this._pressedKeys.delete(key);
+    const guardKey = event.code || event.key;
+    this._pressedKeys.delete(guardKey);
 
-    if (!this._shouldHandleKey(key)) return;
+    if (!this._shouldHandleKey(event)) return;
 
     event.preventDefault();
     event.stopPropagation();
@@ -195,6 +218,12 @@ class ControlKeyboard {
       case 'repeatSubtitle':
         if (this.callbacks.onRepeatSubtitle) {
           this.callbacks.onRepeatSubtitle();
+        }
+        break;
+
+      case 'retrySubtitleTranslation':
+        if (this.callbacks.onRetrySubtitleTranslation) {
+          this.callbacks.onRetrySubtitleTranslation();
         }
         break;
 

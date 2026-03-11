@@ -86,6 +86,7 @@ const ControlIntegration = {
             onPrevSubtitle: this._handlePrevSubtitle.bind(this),
             onNextSubtitle: this._handleNextSubtitle.bind(this),
             onRepeatSubtitle: this._handleRepeatSubtitle.bind(this),
+            onRetrySubtitleTranslation: this._handleRetrySubtitleTranslation.bind(this),
             onSpeedChange: this._handleSpeedChange.bind(this),
             onSourceLangChange: this._handleSourceLangChange.bind(this),
             onSettingsClick: this._handleSettingsClick.bind(this),
@@ -440,6 +441,14 @@ const ControlIntegration = {
    */
   _handleRepeatSubtitle() {
     ControlActions.repeatCurrentSubtitle(this._subtitles);
+  },
+
+  /**
+   * Force a fresh translation attempt for the current subtitle.
+   * @private
+   */
+  _handleRetrySubtitleTranslation() {
+    ControlActions.retryCurrentSubtitleTranslation(this._subtitles);
   },
 
   /**

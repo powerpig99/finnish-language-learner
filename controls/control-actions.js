@@ -64,7 +64,7 @@ const ControlActions = {
     return uniqueTargets;
   },
 
-  notifyRepeatSubtitleTarget(target) {
+  dispatchSubtitleActionEvent(eventName, target) {
     const subtitleText = typeof target?.text === 'string' ? target.text.trim() : '';
     if (!subtitleText) {
       return;
@@ -72,9 +72,33 @@ const ControlActions = {
     if (typeof document?.dispatchEvent !== 'function' || typeof CustomEvent !== 'function') {
       return;
     }
-    document.dispatchEvent(new CustomEvent('dscRepeatSubtitle', {
+    document.dispatchEvent(new CustomEvent(eventName, {
       detail: { subtitleText },
     }));
+  },
+
+  getCurrentSubtitleTarget(subtitles = []) {
+    const video = this.getVideoElement();
+    if (!video) return null;
+
+    const targets = this.getNavigationTargets(subtitles);
+    if (targets.length === 0) return null;
+
+    const currentTime = video.currentTime;
+
+    let currentSubIndex = -1;
+    for (let i = 0; i < targets.length; i++) {
+      const target = targets[i];
+      if (typeof target.endTime === 'number' &&
+        currentTime >= target.startTime && currentTime <= target.endTime) {
+        currentSubIndex = i;
+        break;
+      } else if (currentTime >= target.startTime) {
+        currentSubIndex = i;
+      }
+    }
+
+    return currentSubIndex === -1 ? targets[0] : targets[currentSubIndex];
   },
 
   seekToSubtitleTarget(video, target) {
@@ -182,31 +206,22 @@ const ControlActions = {
     const video = this.getVideoElement();
     if (!video) return false;
 
-    const targets = this.getNavigationTargets(subtitles);
-    if (targets.length === 0) return false;
+    const currentTarget = this.getCurrentSubtitleTarget(subtitles);
+    if (!currentTarget) return false;
 
-    const currentTime = video.currentTime;
+    return this.seekToSubtitleTarget(video, currentTarget);
+  },
 
-    // Find current subtitle (the one we're in or the most recent one)
-    let currentSubIndex = -1;
-    for (let i = 0; i < targets.length; i++) {
-      const target = targets[i];
-      if (typeof target.endTime === 'number' &&
-        currentTime >= target.startTime && currentTime <= target.endTime) {
-        currentSubIndex = i;
-        break;
-      } else if (currentTime >= target.startTime) {
-        currentSubIndex = i; // Keep track of last passed subtitle
-      }
-    }
+  /**
+   * Re-translate the current subtitle line without affecting playback.
+   * @param {Array<{startTime: number, endTime?: number|null, text?: string}>} subtitles
+   */
+  retryCurrentSubtitleTranslation(subtitles = []) {
+    const currentTarget = this.getCurrentSubtitleTarget(subtitles);
+    if (!currentTarget) return false;
 
-    if (currentSubIndex === -1) {
-      this.notifyRepeatSubtitleTarget(targets[0]);
-      return this.seekToSubtitleTarget(video, targets[0]);
-    }
-
-    this.notifyRepeatSubtitleTarget(targets[currentSubIndex]);
-    return this.seekToSubtitleTarget(video, targets[currentSubIndex]);
+    this.dispatchSubtitleActionEvent('dscRetrySubtitleTranslation', currentTarget);
+    return true;
   },
 
   /**

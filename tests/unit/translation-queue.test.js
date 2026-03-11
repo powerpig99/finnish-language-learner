@@ -133,19 +133,41 @@ describe('translation queue non-translatable subtitle handling', () => {
         assert.equal(context.hasTranslatableSubtitleContent(context.normalizeSubtitleText('こんにちは')), true);
     });
 
+    test('detectLikelySubtitleLineLanguage uses the subtitle line as the authoritative language hint', () => {
+        const { context } = buildTranslationQueueHarness();
+
+        assert.equal(context.detectLikelySubtitleLineLanguage('This is already English'), 'en');
+        assert.equal(context.detectLikelySubtitleLineLanguage('Fierce nipple pierce, you got me sprung with your tongue ring'), 'en');
+        assert.equal(context.detectLikelySubtitleLineLanguage('Mitä nyt tapahtui'), 'fi');
+        assert.equal(context.detectLikelySubtitleLineLanguage('Ooo!'), null);
+    });
+
     test('shouldLogTranslationFailureAsWarning classifies provider/config errors as warnings', () => {
         const { context } = buildTranslationQueueHarness();
 
         assert.equal(
-            context.shouldLogTranslationFailureAsWarning('Grok access denied (check API key permissions and model access)'),
+            context.shouldLogTranslationFailureAsWarning('provider_request_failed', 'Grok access denied (check API key permissions and model access)'),
             true
         );
         assert.equal(
-            context.shouldLogTranslationFailureAsWarning('Gemini rate limit exceeded'),
+            context.shouldLogTranslationFailureAsWarning('provider_request_failed', 'Gemini rate limit exceeded'),
             true
         );
         assert.equal(
-            context.shouldLogTranslationFailureAsWarning('Google Cloud error: 403'),
+            context.shouldLogTranslationFailureAsWarning('provider_request_failed', 'Google Cloud error: 403'),
+            true
+        );
+    });
+
+    test('shouldLogTranslationFailureAsWarning treats model-response validation failures as warnings', () => {
+        const { context } = buildTranslationQueueHarness();
+
+        assert.equal(
+            context.shouldLogTranslationFailureAsWarning('echo_back_failure', 'Translation echoed original text'),
+            true
+        );
+        assert.equal(
+            context.shouldLogTranslationFailureAsWarning('language_label_failure', 'Translation returned a language label instead of translated subtitle'),
             true
         );
     });
@@ -154,11 +176,11 @@ describe('translation queue non-translatable subtitle handling', () => {
         const { context } = buildTranslationQueueHarness();
 
         assert.equal(
-            context.shouldLogTranslationFailureAsWarning('TypeError: Cannot read properties of undefined'),
+            context.shouldLogTranslationFailureAsWarning('provider_exception', 'TypeError: Cannot read properties of undefined'),
             false
         );
         assert.equal(
-            context.shouldLogTranslationFailureAsWarning('Network request failed'),
+            context.shouldLogTranslationFailureAsWarning('provider_exception', 'Network request failed'),
             false
         );
     });
@@ -229,6 +251,21 @@ describe('translation queue non-translatable subtitle handling', () => {
         assert.equal(entry?.text, 'Hello world');
     });
 
+    test('markTranslationFailed cannot overwrite a completed success state', () => {
+        const { context } = buildTranslationQueueHarness();
+        const key = toTranslationKey('Hei maailma');
+        context.subtitleState.set(key, { status: 'pending', updatedAt: Date.now() });
+
+        const didSucceed = context.markTranslationSuccess('Hei maailma', 'Hello world');
+        const didOverwrite = context.markTranslationFailed('Hei maailma', 'late failure');
+
+        assert.equal(didSucceed, true);
+        assert.equal(didOverwrite, false);
+        const entry = context.subtitleState.get(key);
+        assert.equal(entry?.status, 'success');
+        assert.equal(entry?.text, 'Hello world');
+    });
+
     test('markTranslationSuccess marks identical translatable text as echo-back failure', () => {
         const { context } = buildTranslationQueueHarness();
         const key = toTranslationKey('Hei maailma');
@@ -245,6 +282,52 @@ describe('translation queue non-translatable subtitle handling', () => {
         assert.equal(typeof entry?.nextRetryAt, 'number');
         assert.ok(Number.isFinite(entry?.nextRetryAt));
         assert.ok(entry.nextRetryAt > Date.now());
+    });
+
+    test('markTranslationSuccess allows identical text when the subtitle line is already in the target language', () => {
+        const { context } = buildTranslationQueueHarness();
+        const key = toTranslationKey('This is already English');
+        context.detectedSourceLanguage = 'fi';
+        context.targetLanguage = 'EN-US';
+        context.subtitleState.set(key, { status: 'pending', updatedAt: Date.now() });
+
+        const updated = context.markTranslationSuccess('This is already English', 'This is already English');
+
+        assert.equal(updated, true);
+        const entry = context.subtitleState.get(key);
+        assert.equal(entry?.status, 'success');
+        assert.equal(entry?.text, 'This is already English');
+    });
+
+    test('markTranslationSuccess allows identical English lyrics even when one word overlaps with Finnish', () => {
+        const { context } = buildTranslationQueueHarness();
+        const line = 'Fierce nipple pierce, you got me sprung with your tongue ring';
+        const key = toTranslationKey(line);
+        context.detectedSourceLanguage = 'fi';
+        context.targetLanguage = 'EN-US';
+        context.subtitleState.set(key, { status: 'pending', updatedAt: Date.now() });
+
+        const updated = context.markTranslationSuccess(line, line);
+
+        assert.equal(updated, true);
+        const entry = context.subtitleState.get(key);
+        assert.equal(entry?.status, 'success');
+        assert.equal(entry?.text, line);
+    });
+
+    test('markTranslationSuccess allows identical interjection-like lines when language is ambiguous', () => {
+        const { context } = buildTranslationQueueHarness();
+        const key = toTranslationKey('Ooo!');
+        context.detectedSourceLanguage = 'fi';
+        context.targetLanguage = 'EN-US';
+        context.subtitleState.set(key, { status: 'pending', updatedAt: Date.now() });
+
+        const updated = context.markTranslationSuccess('Ooo!', 'Ooo!');
+
+        assert.equal(updated, true);
+        const entry = context.subtitleState.get(key);
+        assert.equal(entry?.status, 'success');
+        assert.equal(entry?.text, 'Ooo!');
     });
 
     test('markTranslationSuccess marks tag-wrapped source echo as echo-back failure', () => {
@@ -421,6 +504,30 @@ describe('translation queue non-translatable subtitle handling', () => {
         assert.equal(entry?.text, 'Hello world');
     });
 
+    test('requestManualSubtitleRetranslation forces a fresh translation even when a success is already cached', async () => {
+        const { context, dispatchedEvents } = buildTranslationQueueHarness();
+        const key = toTranslationKey('Hei maailma');
+        context.subtitleState.set(key, {
+            status: 'success',
+            text: 'Hello world',
+            updatedAt: Date.now(),
+        });
+        let fetchCallCount = 0;
+        context.fetchBatchTranslation = async (_texts) => {
+            fetchCallCount += 1;
+            return [true, ['Hi again']];
+        };
+
+        const wasQueued = await context.requestManualSubtitleRetranslation('Hei maailma');
+
+        assert.equal(wasQueued, true);
+        assert.equal(fetchCallCount, 1);
+        const entry = context.subtitleState.get(key);
+        assert.equal(entry?.status, 'success');
+        assert.equal(entry?.text, 'Hi again');
+        assert.equal(dispatchedEvents.length, 3);
+    });
+
     test('requestVisibleSubtitleTranslation bypasses cooldown for failed subtitle and retries immediately', async () => {
         const { context } = buildTranslationQueueHarness();
         const key = toTranslationKey('Hei maailma');
@@ -445,6 +552,26 @@ describe('translation queue non-translatable subtitle handling', () => {
         assert.equal(entry?.text, 'Hello world');
     });
 
+    test('requestManualSubtitleRetranslation does not interrupt an in-flight translation', async () => {
+        const { context } = buildTranslationQueueHarness();
+        const key = toTranslationKey('Hei maailma');
+        context.subtitleState.set(key, {
+            status: 'pending',
+            updatedAt: Date.now(),
+        });
+        let fetchCallCount = 0;
+        context.fetchBatchTranslation = async (_texts) => {
+            fetchCallCount += 1;
+            return [true, ['Hello world']];
+        };
+
+        const wasQueued = await context.requestManualSubtitleRetranslation('Hei maailma');
+
+        assert.equal(wasQueued, false);
+        assert.equal(fetchCallCount, 0);
+        assert.equal(context.subtitleState.get(key)?.status, 'pending');
+    });
+
     test('handleBatchTranslation marks subtitle as failed only after batch retry limit is exhausted', async () => {
         const { context, dispatchedEvents, consoleStats } = buildTranslationQueueHarness();
         let fetchCallCount = 0;
@@ -466,15 +593,16 @@ describe('translation queue non-translatable subtitle handling', () => {
         assert.equal(entry?.status, 'failed');
         assert.match(entry?.error || '', /batch retry limit reached/);
         assert.equal(dispatchedEvents.length, 3);
-        assert.equal(consoleStats.error.length, 1);
-        assert.match(consoleStats.error[0][0], /Subtitle translation failed/);
-        assert.match(consoleStats.error[0][0], /failureType=echo_back_failure/);
-        assert.match(consoleStats.error[0][0], /provider=gemini/);
-        assert.match(consoleStats.error[0][0], /providerResponses=\["Hei maailma"\]/);
-        assert.equal(consoleStats.error[0][1]?.provider, 'gemini');
-        assert.equal(consoleStats.error[0][1]?.failureType, 'echo_back_failure');
-        assert.deepEqual(Array.from(consoleStats.error[0][1]?.subtitles || []), ['Hei maailma']);
-        assert.deepEqual(Array.from(consoleStats.error[0][1]?.providerResponses || []), ['Hei maailma']);
+        assert.equal(consoleStats.error.length, 0);
+        assert.equal(consoleStats.warn.length, 1);
+        assert.match(consoleStats.warn[0][0], /Subtitle translation rejected/);
+        assert.match(consoleStats.warn[0][0], /failureType=echo_back_failure/);
+        assert.match(consoleStats.warn[0][0], /provider=gemini/);
+        assert.match(consoleStats.warn[0][0], /providerResponses=\["Hei maailma"\]/);
+        assert.equal(consoleStats.warn[0][1]?.provider, 'gemini');
+        assert.equal(consoleStats.warn[0][1]?.failureType, 'echo_back_failure');
+        assert.deepEqual(Array.from(consoleStats.warn[0][1]?.subtitles || []), ['Hei maailma']);
+        assert.deepEqual(Array.from(consoleStats.warn[0][1]?.providerResponses || []), ['Hei maailma']);
     });
 
     test('handleBatchTranslation updates navigation timing during in-flight batch and processes queued subtitles', async () => {

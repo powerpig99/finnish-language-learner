@@ -248,7 +248,7 @@ describe('ControlActions subtitle navigation', () => {
         assert.equal(video.playCalls, 1);
     });
 
-    test('repeatCurrentSubtitle dispatches current subtitle text for retry handling', () => {
+    test('repeatCurrentSubtitle does not dispatch translation retry events', () => {
         const dispatchedEvents = [];
         const video = makeVideo({
             currentTime: 35.2,
@@ -267,8 +267,31 @@ describe('ControlActions subtitle navigation', () => {
             { startTime: 50, endTime: 52, text: 'three' },
         ]);
 
+        assert.equal(dispatchedEvents.length, 0);
+    });
+
+    test('retryCurrentSubtitleTranslation dispatches current subtitle text for forced re-translation', () => {
+        const dispatchedEvents = [];
+        const video = makeVideo({
+            currentTime: 35.2,
+            paused: true,
+            textTracks: [],
+        });
+        const controlActions = buildControlActionsHarness(video, {
+            dispatchEvent: (event) => {
+                dispatchedEvents.push(event);
+            },
+        });
+
+        const didDispatch = controlActions.retryCurrentSubtitleTranslation([
+            { startTime: 2, endTime: 3, text: 'one' },
+            { startTime: 35, endTime: 37, text: 'two' },
+            { startTime: 50, endTime: 52, text: 'three' },
+        ]);
+
+        assert.equal(didDispatch, true);
         assert.equal(dispatchedEvents.length, 1);
-        assert.equal(dispatchedEvents[0].type, 'dscRepeatSubtitle');
+        assert.equal(dispatchedEvents[0].type, 'dscRetrySubtitleTranslation');
         assert.equal(dispatchedEvents[0].detail?.subtitleText, 'two');
     });
 });
