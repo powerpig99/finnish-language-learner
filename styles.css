@@ -259,6 +259,14 @@ div[class*="PlayerUI__UI"]:not(.yle-mouse-active) div[class*="BottomControlBar__
   visibility: visible !important;
   height: auto !important;
   overflow: visible !important;
+  gap: 4px !important;
+}
+
+#displayed-subtitles-wrapper > span {
+  background: rgba(16, 16, 16, 0.3);
+  border-radius: 6px;
+  padding: 0;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
 }
 
 /* Font sizes are set dynamically via JavaScript based on user settings */
